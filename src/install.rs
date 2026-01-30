@@ -1,5 +1,5 @@
 use crate::paths;
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -32,7 +32,8 @@ pub async fn run() -> Result<()> {
         String::new()
     };
 
-    let updated = merge_config(&current, &render_block());
+    let proxy_command = proxy_command_path()?;
+    let updated = merge_config(&current, &render_block(&proxy_command));
 
     if current == updated {
         println!("No changes needed for {}", config_path.display());
@@ -66,11 +67,11 @@ pub async fn run() -> Result<()> {
     Ok(())
 }
 
-fn render_block() -> String {
+fn render_block(proxy_command: &str) -> String {
     format!(
         r#"{start}
 Host *.sshpod
-  ProxyCommand ~/.local/bin/sshpod proxy --host %h --user %r --port %p
+  ProxyCommand {proxy_command} proxy --host %h --user %r --port %p
   StrictHostKeyChecking no
   UserKnownHostsFile /dev/null
   GlobalKnownHostsFile /dev/null
@@ -82,8 +83,37 @@ Host *.sshpod
 {end}
 "#,
         start = START_MARKER,
+        proxy_command = proxy_command,
         end = END_MARKER
     )
+}
+
+fn proxy_command_path() -> Result<String> {
+    let exe = std::env::current_exe()
+        .context("failed to resolve current executable path; run sshpod from a real binary path")?;
+
+    let mut path = exe
+        .to_str()
+        .ok_or_else(|| anyhow!("executable path contains invalid UTF-8: {}", exe.display()))?
+        .to_string();
+
+    // `std::env::current_exe` on Windows can return the extended-length path (\\?\C:\...).
+    const UNC_PREFIX: &str = "\\\\?\\";
+    if let Some(stripped) = path.strip_prefix(UNC_PREFIX) {
+        path = stripped.to_string();
+    }
+
+    #[cfg(windows)]
+    {
+        // OpenSSH on Windows accepts forward slashes and they avoid backslash-escape pitfalls.
+        path = path.replace('\\', "/");
+    }
+
+    if path.contains(' ') {
+        path = format!("\"{}\"", path);
+    }
+
+    Ok(path)
 }
 
 fn merge_config(current: &str, block: &str) -> String {
