@@ -15,22 +15,18 @@ jobs:
   create_release:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    outputs:
-      upload_url: ${{ steps.release.outputs.upload_url }}
-      tag: ${{ steps.tag.outputs.tag }}
     steps:
       - name: Compute tag
         id: tag
         run: echo "tag=v${{ inputs.version }}" >> "$GITHUB_OUTPUT"
 
       - name: Create Release
-        id: release
-        uses: actions/create-release@v1
+        uses: softprops/action-gh-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
-          release_name: sshpod ${{ inputs.version }}
+          name: sshpod ${{ inputs.version }}
           draft: true
           prerelease: false
 
@@ -160,11 +156,10 @@ jobs:
           path: artifacts
 
       - name: Upload release asset
-        uses: actions/upload-release-asset@v1
+        uses: softprops/action-gh-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          upload_url: ${{ needs.create_release.outputs.upload_url }}
-          asset_path: artifacts/sshpod_${{ env.VERSION }}_${{ matrix.arch_name }}.${{ matrix.ext }}
-          asset_name: sshpod_${{ env.VERSION }}_${{ matrix.arch_name }}.${{ matrix.ext }}
-          asset_content_type: ${{ matrix.ext == 'zip' && 'application/zip' || 'application/gzip' }}
+          tag_name: v${{ env.VERSION }}
+          files: artifacts/sshpod_${{ env.VERSION }}_${{ matrix.arch_name }}.${{ matrix.ext }}
+          fail_on_unmatched_files: true
