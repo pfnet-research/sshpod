@@ -1,0 +1,29 @@
+ARG OPENSSH_VERSION=9.7p1
+
+FROM alpine:3.20 AS builder
+ARG OPENSSH_VERSION
+RUN apk add --no-cache build-base linux-headers openssl-dev openssl-libs-static zlib-dev zlib-static curl ca-certificates tar xz \
+  && update-ca-certificates
+WORKDIR /src
+RUN curl -fsSLO "https://cdn.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-${OPENSSH_VERSION}.tar.gz" \
+  && tar xzf "openssh-${OPENSSH_VERSION}.tar.gz"
+WORKDIR /src/openssh-${OPENSSH_VERSION}
+RUN CC="gcc" CFLAGS="-static" LDFLAGS="-static" ./configure \
+    --prefix=/tmp/oss \
+    --sysconfdir=/tmp/oss/etc \
+    --with-privsep-path=/tmp/empty \
+    --without-pam \
+    --without-libedit \
+    --disable-strip
+RUN make -j"$(nproc)" sshd
+
+FROM alpine:3.20 AS bundle
+ARG OPENSSH_VERSION
+ARG BINARY_FILENAME=sshd.xz
+ARG TARGETOS
+ARG TARGETARCH
+WORKDIR /tmp/bundle
+RUN apk add --no-cache xz
+RUN mkdir -p /out
+COPY --from=builder /src/openssh-${OPENSSH_VERSION}/sshd /tmp/sshd
+RUN xz -9 /tmp/sshd && mv /tmp/sshd.xz "/out/${BINARY_FILENAME}"

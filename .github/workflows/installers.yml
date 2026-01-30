@@ -1,0 +1,65 @@
+name: Installer
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  unix-installers:
+    name: Unix installers
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ensure installer executable
+        run: chmod +x install.sh
+
+      - name: Run installer script (latest release)
+        env:
+          HOME: ${{ runner.temp }}/sshpod-home
+        run: |
+          set -eux
+          mkdir -p "$HOME"
+          sh -x ./install.sh --yes
+
+      - name: Verify install
+        env:
+          HOME: ${{ runner.temp }}/sshpod-home
+        run: |
+          set -eux
+          test -x "$HOME/.local/bin/sshpod"
+          "$HOME/.local/bin/sshpod" --version
+          grep -F "Host *.sshpod" "$HOME/.ssh/config"
+
+  windows-installer:
+    name: Windows installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run installer script (latest release)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $installHome = Join-Path $env:RUNNER_TEMP "sshpod-home"
+          New-Item -ItemType Directory -Path $installHome -Force | Out-Null
+          $env:USERPROFILE = $installHome
+          Set-Item Env:HOME $installHome
+          ./install.ps1 -Yes
+
+      - name: Verify install
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $installHome = Join-Path $env:RUNNER_TEMP "sshpod-home"
+          $bin = Join-Path $installHome ".local\bin\sshpod.exe"
+          if (-not (Test-Path $bin)) { throw "sshpod.exe missing" }
+          & $bin --version
+          $config = Join-Path $installHome ".ssh\config"
+          if (-not (Test-Path $config)) { throw "config not found" }
+          if (-not (Select-String -Path $config -SimpleMatch "Host *.sshpod")) { throw "ssh config block missing" }
