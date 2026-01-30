@@ -1,0 +1,105 @@
+name: E2E
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build sshpod
+        run: cargo build --release --locked
+
+      - name: Upload sshpod binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: sshpod-linux
+          path: target/release/sshpod
+
+  e2e:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ubuntu
+            image: ubuntu:22.04
+          - name: alpine
+            image: alpine:3.19
+          - name: busybox
+            image: busybox:1.36
+          - name: python
+            image: python:3.12-slim
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download sshpod binary
+        uses: actions/download-artifact@v4
+        with:
+          name: sshpod-linux
+          path: /tmp/sshpod-bin
+
+      - name: Make binary executable
+        run: chmod +x /tmp/sshpod-bin/sshpod
+
+      - name: Install sshpod for configure
+        run: |
+          mkdir -p ~/.local/bin
+          cp /tmp/sshpod-bin/sshpod ~/.local/bin/sshpod
+
+      - name: Configure sshpod
+        run: ~/.local/bin/sshpod configure
+
+      - name: Write kind config
+        run: |
+          cat >/tmp/kind-config.yaml <<'EOF'
+          kind: Cluster
+          apiVersion: kind.x-k8s.io/v1alpha4
+          nodes:
+            - role: control-plane
+              image: kindest/node:v1.30.0
+          EOF
+
+      - name: Create kind cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: sshpod-e2e-${{ matrix.name }}
+          config: /tmp/kind-config.yaml
+
+      - name: Launch test pod
+        run: |
+          set -euxo pipefail
+          kubectl wait --for=condition=Ready node --all --timeout=180s
+          POD_NAME="sshpod-e2e-${{ matrix.name }}"
+          kubectl run "$POD_NAME" \
+            --image="${{ matrix.image }}" \
+            --restart=Never \
+            --command -- sh -c "while true; do sleep 3600; done"
+          kubectl wait --for=condition=Ready "pod/$POD_NAME" --timeout=180s
+
+      - name: Verify ssh works through sshpod
+        env:
+          SSHPOD_BIN: /tmp/sshpod-bin/sshpod
+        shell: bash
+        run: |
+          set -eux
+          POD_NAME="sshpod-e2e-${{ matrix.name }}"
+          KUBE_CONTEXT="$(kubectl config current-context)"
+          ssh "root@pod--${POD_NAME}.namespace--default.context--${KUBE_CONTEXT}.sshpod" -- echo 'ssh-ok' | tee /tmp/ssh_output
+          grep 'ssh-ok' /tmp/ssh_output
