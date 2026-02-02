@@ -163,3 +163,5 @@ jobs:
           tag_name: v${{ env.VERSION }}
           files: artifacts/sshpod_${{ env.VERSION }}_${{ matrix.arch_name }}.${{ matrix.ext }}
           fail_on_unmatched_files: true
+          draft: true
+          prerelease: false
