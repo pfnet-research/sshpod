@@ -19,6 +19,8 @@ pub enum Target {
 pub enum HostSpecError {
     #[error("hostname must end with .sshpod")]
     MissingSuffix,
+    #[error("hostname segment '{segment}' is missing \"--\"")]
+    MissingSeparator { segment: String },
     #[error(
         "hostname must include one of pod--/deployment--/job-- (container-- optional, namespace-- optional, context-- optional), ending with .sshpod"
     )]
@@ -37,6 +39,11 @@ pub fn parse(host: &str) -> Result<HostSpec, HostSpecError> {
     let mut target = None;
 
     for token in without_suffix.split('.').filter(|s| !s.is_empty()) {
+        if !token.contains("--") {
+            return Err(HostSpecError::MissingSeparator {
+                segment: token.to_string(),
+            });
+        }
         if let Some(rest) = token.strip_prefix("container--") {
             if rest.is_empty() || container.is_some() {
                 return Err(HostSpecError::InvalidFormat);
@@ -97,7 +104,7 @@ fn parse_target(token: &str) -> Result<Target, HostSpecError> {
         }
         return Ok(Target::Job(rest.to_string()));
     }
-    Ok(Target::Pod(token.to_string()))
+    Err(HostSpecError::InvalidFormat)
 }
 
 #[cfg(test)]
@@ -121,6 +128,16 @@ mod tests {
     #[test]
     fn reject_unknown_prefix() {
         assert!(parse("foo--bar.pod--a.context--ctx.sshpod").is_err());
+    }
+
+    #[test]
+    fn reject_missing_separator_segment() {
+        let err = parse("deployment--ws.context-pfcp-pfn-yh1-01.sshpod").unwrap_err();
+        assert!(matches!(
+            err,
+            HostSpecError::MissingSeparator { ref segment }
+                if segment == "context-pfcp-pfn-yh1-01"
+        ));
     }
 
     #[test]
