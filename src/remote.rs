@@ -94,7 +94,6 @@ BASE="$1"
 LOGIN_USER="$2"
 PUBKEY_LINE="$3"
 SSHD="$BASE/bundle/sshd"
-ENV_FILE="$BASE/environment"
 
 exec 3>&1
 exec 1>&2
@@ -111,14 +110,6 @@ TOP_DIR="$(dirname "$BASE_PARENT")"
 chmod 711 "$TOP_DIR" "$BASE_PARENT"
 debug_log "start script begin (base=$BASE user=$LOGIN_USER)"
 
-get_home() {
-  if command -v getent >/dev/null 2>&1; then
-    getent passwd "$1" | awk -F: '{print $6}'
-  elif [ -f /etc/passwd ]; then
-    awk -F: -v u="$1" '$1==u {print $6}' /etc/passwd | head -n1
-  fi
-}
-
 have_user() {
   if command -v getent >/dev/null 2>&1; then
     getent passwd "$1"
@@ -134,9 +125,6 @@ if [ ! -f "$BASE/authorized_keys" ]; then
 fi
 grep -qxF "$PUBKEY_LINE" "$BASE/authorized_keys" || printf '%s\n' "$PUBKEY_LINE" >> "$BASE/authorized_keys"
 chmod 600 "$BASE/authorized_keys"
-if [ -n "$LOGIN_USER" ]; then
-  chown "$LOGIN_USER":"$LOGIN_USER" "$BASE" "$BASE/authorized_keys" || true
-fi
 
 mkdir -p /tmp/empty
 chmod 755 /tmp/empty
@@ -169,7 +157,6 @@ rand_port() {
 
 REMOTE_PATH="${PATH:-/usr/bin:/bin}"
 ENV_EXPORTS="$(env | awk -F= '/^KUBERNETES_/ {print $1}')"
-USER_HOME="$(get_home "$LOGIN_USER")"
 
 i=0
 while [ $i -lt 30 ]; do
@@ -193,9 +180,10 @@ AllowTcpForwarding yes
 X11Forwarding no
 Subsystem sftp internal-sftp
 LogLevel VERBOSE
-PermitUserEnvironment yes
 EOF
 
+  # Keep session environment in sshd_config so startup does not depend on
+  # whether the target home lives on NFS or has a managed ~/.ssh symlink.
   printf 'SetEnv PATH=%s\n' "$REMOTE_PATH" >> "$BASE/sshd_config"
   for key in $ENV_EXPORTS; do
     val="$(printenv "$key" || true)"
@@ -203,39 +191,6 @@ EOF
   done
   if [ -n "${KUBECONFIG:-}" ]; then
     printf 'SetEnv KUBECONFIG=%s\n' "$KUBECONFIG" >> "$BASE/sshd_config"
-  fi
-  if [ -n "$USER_HOME" ] && [ -d "$USER_HOME" ]; then
-    mkdir -p "$USER_HOME/.ssh"
-    {
-      printf 'PATH=%s\n' "$REMOTE_PATH"
-      for key in $ENV_EXPORTS; do
-        val="$(printenv "$key" || true)"
-        printf '%s=%s\n' "$key" "$val"
-      done
-      if [ -n "${KUBECONFIG:-}" ]; then
-        printf 'KUBECONFIG=%s\n' "$KUBECONFIG"
-      fi
-    } > "$USER_HOME/.ssh/environment"
-    chmod 700 "$USER_HOME/.ssh"
-    chmod 600 "$USER_HOME/.ssh/environment"
-    if [ -n "$LOGIN_USER" ]; then
-      chown "$LOGIN_USER":"$LOGIN_USER" "$USER_HOME/.ssh" "$USER_HOME/.ssh/environment" || true
-    fi
-  fi
-
-  {
-    printf 'PATH=%s\n' "$REMOTE_PATH"
-    for key in $ENV_EXPORTS; do
-      val="$(printenv "$key" || true)"
-      printf '%s=%s\n' "$key" "$val"
-    done
-    if [ -n "${KUBECONFIG:-}" ]; then
-      printf 'KUBECONFIG=%s\n' "$KUBECONFIG"
-    fi
-  } > "$ENV_FILE"
-  chmod 600 "$ENV_FILE"
-  if [ -n "$LOGIN_USER" ]; then
-    chown "$LOGIN_USER":"$LOGIN_USER" "$ENV_FILE" || true
   fi
 
   chmod 600 "$BASE/sshd_config"
@@ -261,4 +216,13 @@ exit 1
 "#;
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use super::START_SSHD_SCRIPT;
+
+    #[test]
+    fn start_script_avoids_user_home_side_effects() {
+        assert!(!START_SSHD_SCRIPT.contains(".ssh/environment"));
+        assert!(!START_SSHD_SCRIPT.contains("PermitUserEnvironment yes"));
+        assert!(START_SSHD_SCRIPT.contains("SetEnv PATH="));
+    }
+}
