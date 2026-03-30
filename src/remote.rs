@@ -102,6 +102,13 @@ debug_log() {
   printf '[sshpod] %s\n' "$1" >&2
 }
 
+append_setenv_arg() {
+  key="$1"
+  value="$2"
+  escaped="$(printf '%s=%s' "$key" "$value" | sed 's/[\\"]/\\&/g')"
+  printf ' "%s"' "$escaped"
+}
+
 umask 077
 mkdir -p "$BASE" "$BASE/logs" "$BASE/hostkeys"
 chmod 700 "$BASE" "$BASE/hostkeys" "$BASE/logs"
@@ -184,14 +191,20 @@ EOF
 
   # Keep session environment in sshd_config so startup does not depend on
   # whether the target home lives on NFS or has a managed ~/.ssh symlink.
-  printf 'SetEnv PATH=%s\n' "$REMOTE_PATH" >> "$BASE/sshd_config"
-  for key in $ENV_EXPORTS; do
-    val="$(printenv "$key" || true)"
-    printf 'SetEnv %s=%s\n' "$key" "$val" >> "$BASE/sshd_config"
-  done
-  if [ -n "${KUBECONFIG:-}" ]; then
-    printf 'SetEnv KUBECONFIG=%s\n' "$KUBECONFIG" >> "$BASE/sshd_config"
-  fi
+  # sshd_config only honors the first SetEnv directive, so all vars must be
+  # emitted on a single line.
+  {
+    printf 'SetEnv'
+    append_setenv_arg PATH "$REMOTE_PATH"
+    for key in $ENV_EXPORTS; do
+      val="$(printenv "$key" || true)"
+      append_setenv_arg "$key" "$val"
+    done
+    if [ -n "${KUBECONFIG:-}" ]; then
+      append_setenv_arg KUBECONFIG "$KUBECONFIG"
+    fi
+    printf '\n'
+  } >> "$BASE/sshd_config"
 
   chmod 600 "$BASE/sshd_config"
   rm -f "$BASE/sshd.pid"
@@ -223,6 +236,6 @@ mod tests {
     fn start_script_avoids_user_home_side_effects() {
         assert!(!START_SSHD_SCRIPT.contains(".ssh/environment"));
         assert!(!START_SSHD_SCRIPT.contains("PermitUserEnvironment yes"));
-        assert!(START_SSHD_SCRIPT.contains("SetEnv PATH="));
+        assert!(START_SSHD_SCRIPT.contains("append_setenv_arg PATH"));
     }
 }
