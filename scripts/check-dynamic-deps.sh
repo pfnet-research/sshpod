@@ -34,7 +34,7 @@ case "$(uname -s)" in
     while IFS= read -r dep; do
       [[ -z "$dep" ]] && continue
       case "$dep" in
-        libc.so.*|libgcc_s.so.*|libm.so.*|libpthread.so.*|librt.so.*|libdl.so.*|libutil.so.*|libresolv.so.*|libanl.so.*|libnsl.so.*)
+        libc.so.*|libgcc_s.so.*|libm.so.*|libpthread.so.*|librt.so.*|libdl.so.*|libutil.so.*|libresolv.so.*|libanl.so.*|libnsl.so.*|ld-linux-*.so.*|ld64.so.*)
           ;;
         *)
           echo "unexpected dynamic dependency: $dep" >&2
