@@ -14,4 +14,4 @@ whoami = "1"
 log = "0.4"
 env_logger = "0.11"
 flate2 = "1"
-xz2 = "0.1"
+xz2 = { version = "0.1", features = ["static"] }

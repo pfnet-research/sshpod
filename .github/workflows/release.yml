@@ -90,6 +90,15 @@ jobs:
         run: |
           cargo build --release --locked --target ${{ matrix.target }}
 
+      - name: Verify dynamic dependencies (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          BIN="target/${{ matrix.target }}/release/sshpod"
+          chmod +x ./scripts/check-dynamic-deps.sh
+          ./scripts/check-dynamic-deps.sh "$BIN"
+
       - name: Package (unix)
         if: runner.os != 'Windows'
         id: package_unix
