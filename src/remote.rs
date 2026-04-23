@@ -184,6 +184,7 @@ ChallengeResponseAuthentication no
 PermitEmptyPasswords no
 AllowAgentForwarding yes
 AllowTcpForwarding yes
+GatewayPorts clientspecified
 X11Forwarding no
 Subsystem sftp internal-sftp
 LogLevel VERBOSE
