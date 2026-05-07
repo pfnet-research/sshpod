@@ -48,6 +48,7 @@ scp ./local.tgz ubuntu@job--batch.namespace--etl.context--dev.sshpod:/tmp/
 - Targets: `pod--<pod>`, `deployment--<deployment>`, `job--<job>`; deployments/jobs pick a ready Pod automatically.
 - Optional pieces: `container--<container>` (required for multi-container Pods), `namespace--<namespace>` (falls back to the namespace set on the context, otherwise the cluster default), `context--<context>` (defaults to your current `kubectl` context).
 - Pods running as non-root require you to SSH as that user; root Pods accept any SSH user.
+- Remote port forwarding honors the bind address requested by the client. For example, `ssh -R 0.0.0.0:18000:127.0.0.1:8000 ...sshpod` exposes port `18000` on the Pod network, while omitting the bind address keeps OpenSSH's loopback-only default.
 
 ## Requirements
 - Local: `kubectl` configured for the target cluster with permission to `exec` and `port-forward`; OpenSSH client tools (`ssh`/`scp`/`sftp`) and `ssh-keygen`; ability to write to `~/.ssh/config` and `~/.cache/sshpod`.
