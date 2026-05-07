@@ -3,7 +3,7 @@ DOCKER ?= docker
 INSTALL_ROOT ?= $(HOME)/.local
 BUNDLES_DIR ?= $(CURDIR)/bundles
 ARCHES ?= amd64 arm64
-OPENSSH_VERSION ?= 9.7p1
+OPENSSH_VERSION ?= 10.3p1
 BUNDLE_FILES := $(foreach arch,$(ARCHES),$(BUNDLES_DIR)/sshd_$(arch).xz)
 
 .PHONY: all build install lint format check clean bundles test
