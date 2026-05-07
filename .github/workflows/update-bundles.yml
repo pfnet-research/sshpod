@@ -26,8 +26,13 @@ concurrency:
   cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 jobs:
-  update:
-    runs-on: ubuntu-latest
+  resolve:
+    runs-on: ubuntu-24.04
+    outputs:
+      current: ${{ steps.openssh.outputs.current }}
+      tarball_url: ${{ steps.openssh.outputs.tarball_url }}
+      update_needed: ${{ steps.plan.outputs.update_needed }}
+      version: ${{ steps.openssh.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -93,31 +98,88 @@ jobs:
             echo "update_needed=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Enable arm64 Docker builds
-        if: steps.plan.outputs.update_needed == 'true'
-        run: docker run --privileged --rm tonistiigi/binfmt --install arm64
+  build:
+    needs: resolve
+    if: needs.resolve.outputs.update_needed == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.repository.default_branch || github.ref }}
+          fetch-depth: 0
+          token: ${{ secrets.BUNDLE_UPDATE_TOKEN || github.token }}
 
-      - name: Update version defaults and rebuild bundles
-        if: steps.plan.outputs.update_needed == 'true'
+      - name: Update version defaults and rebuild bundle
         shell: bash
         env:
-          OPENSSH_VERSION: ${{ steps.openssh.outputs.version }}
+          OPENSSH_VERSION: ${{ needs.resolve.outputs.version }}
         run: |
           set -euo pipefail
 
           perl -0pi -e 's/^ARG OPENSSH_VERSION=.*/ARG OPENSSH_VERSION=$ENV{OPENSSH_VERSION}/m' Dockerfile.bundle
           perl -0pi -e 's/^OPENSSH_VERSION \?= .*/OPENSSH_VERSION ?= $ENV{OPENSSH_VERSION}/m' Makefile
-          make -B bundles OPENSSH_VERSION="$OPENSSH_VERSION"
-          xz -t bundles/sshd_amd64.xz
-          xz -t bundles/sshd_arm64.xz
+          make -B bundles ARCHES=${{ matrix.arch }} OPENSSH_VERSION="$OPENSSH_VERSION"
+          xz -t bundles/sshd_${{ matrix.arch }}.xz
+
+      - name: Upload bundle
+        uses: actions/upload-artifact@v6
+        with:
+          name: sshd-${{ matrix.arch }}
+          path: bundles/sshd_${{ matrix.arch }}.xz
+
+  prepare_pr:
+    needs:
+      - resolve
+      - build
+    if: always() && needs.resolve.outputs.update_needed == 'true' && needs.build.result == 'success'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.repository.default_branch || github.ref }}
+          fetch-depth: 0
+          token: ${{ secrets.BUNDLE_UPDATE_TOKEN || github.token }}
+
+      - name: Update version defaults
+        shell: bash
+        env:
+          OPENSSH_VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          perl -0pi -e 's/^ARG OPENSSH_VERSION=.*/ARG OPENSSH_VERSION=$ENV{OPENSSH_VERSION}/m' Dockerfile.bundle
+          perl -0pi -e 's/^OPENSSH_VERSION \?= .*/OPENSSH_VERSION ?= $ENV{OPENSSH_VERSION}/m' Makefile
+
+      - name: Download amd64 bundle
+        uses: actions/download-artifact@v8
+        with:
+          name: sshd-amd64
+          path: bundles
+
+      - name: Download arm64 bundle
+        uses: actions/download-artifact@v8
+        with:
+          name: sshd-arm64
+          path: bundles
 
       - name: Check for changes
-        if: steps.plan.outputs.update_needed == 'true'
         id: changes
         shell: bash
         run: |
           set -euo pipefail
 
+          xz -t bundles/sshd_amd64.xz
+          xz -t bundles/sshd_arm64.xz
           git status --short
           if git diff --quiet -- Makefile Dockerfile.bundle bundles/sshd_amd64.xz bundles/sshd_arm64.xz; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
@@ -131,8 +193,8 @@ jobs:
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           GH_TOKEN: ${{ secrets.BUNDLE_UPDATE_TOKEN || github.token }}
-          OPENSSH_VERSION: ${{ steps.openssh.outputs.version }}
-          TARBALL_URL: ${{ steps.openssh.outputs.tarball_url }}
+          OPENSSH_VERSION: ${{ needs.resolve.outputs.version }}
+          TARBALL_URL: ${{ needs.resolve.outputs.tarball_url }}
         run: |
           set -euo pipefail
 
