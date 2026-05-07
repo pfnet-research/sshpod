@@ -37,7 +37,7 @@ bundles: $(BUNDLE_FILES)
 
 $(BUNDLES_DIR)/sshd_%.xz: Dockerfile.bundle
 	@mkdir -p $(dir $@)
-	@set -euo pipefail; \
+	@set -eu; \
 	ARCH="$*"; \
 	PLATFORM="linux/$$ARCH"; \
 	BUNDLE_FILE="$(notdir $@)"; \
