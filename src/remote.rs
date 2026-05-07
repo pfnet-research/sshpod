@@ -184,6 +184,7 @@ ChallengeResponseAuthentication no
 PermitEmptyPasswords no
 AllowAgentForwarding yes
 AllowTcpForwarding yes
+GatewayPorts clientspecified
 X11Forwarding no
 Subsystem sftp internal-sftp
 LogLevel VERBOSE
@@ -237,5 +238,12 @@ mod tests {
         assert!(!START_SSHD_SCRIPT.contains(".ssh/environment"));
         assert!(!START_SSHD_SCRIPT.contains("PermitUserEnvironment yes"));
         assert!(START_SSHD_SCRIPT.contains("append_setenv_arg PATH"));
+    }
+
+    #[test]
+    fn start_script_allows_client_requested_remote_forward_bind_addresses() {
+        assert!(START_SSHD_SCRIPT.contains("\nAllowTcpForwarding yes\n"));
+        assert!(START_SSHD_SCRIPT.contains("\nGatewayPorts clientspecified\n"));
+        assert!(!START_SSHD_SCRIPT.contains("\nGatewayPorts yes\n"));
     }
 }

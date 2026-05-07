@@ -47,6 +47,7 @@ scp ./local.tgz ubuntu@job--batch.namespace--etl.context--dev.sshpod:/tmp/
 - 対象は `pod--<pod>`、`deployment--<deployment>`、`job--<job>` のいずれかで指定します。Deployment/Job は Ready な Pod を自動で選択します。
 - オプション: `container--<container>`（マルチコンテナ Pod では必須）、`namespace--<namespace>`（コンテキストに設定された namespace があればそれを、無い場合はクラスタのデフォルトを使用）、`context--<context>`（省略時は現在の `kubectl` コンテキスト）。
 - Pod が非 root で動いている場合、SSH ユーザはコンテナ内の実ユーザと一致させてください。root Pod であれば任意のユーザで接続できます。
+- リモートポートフォワードでは、クライアントが指定した bind address を尊重します。例えば `ssh -R 0.0.0.0:18000:127.0.0.1:8000 ...sshpod` は Pod ネットワーク上で `18000` を公開し、bind address を省略した場合は OpenSSH のデフォルトどおり localhost のみに留まります。
 
 ## 要件
 - ローカル: 対象クラスタに到達でき、`exec`/`port-forward` が許可された `kubectl`、OpenSSH クライアント (`ssh`/`scp`/`sftp`) と `ssh-keygen`、`~/.ssh/config` と `~/.cache/sshpod` への書き込み権限。
