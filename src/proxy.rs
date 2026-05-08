@@ -138,11 +138,13 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
         local_port, pod_name, remote_port
     );
 
-    let stream = TcpStream::connect(("127.0.0.1", local_port))
+    let pump_result = match TcpStream::connect(("127.0.0.1", local_port))
         .await
-        .context("failed to connect to forwarded sshd port")?;
-
-    let pump_result = proxy_io::pump(stream).await;
+        .context("failed to connect to forwarded sshd port")
+    {
+        Ok(stream) => proxy_io::pump(stream).await,
+        Err(err) => Err(err),
+    };
     let stop_result = forward.stop().await;
 
     pump_result?;
