@@ -245,6 +245,25 @@ pub async fn list_contexts() -> Result<Vec<String>> {
     Ok(list)
 }
 
+pub async fn current_context() -> Result<String> {
+    let output = Command::new("kubectl")
+        .args(["config", "current-context"])
+        .output()
+        .await
+        .context("failed to run kubectl config current-context")?;
+    if !output.status.success() {
+        bail!(
+            "kubectl config current-context failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let context = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if context.is_empty() {
+        bail!("kubectl config current-context returned an empty context");
+    }
+    Ok(context)
+}
+
 pub async fn get_context_namespace(context: &str) -> Result<Option<String>> {
     let output = Command::new("kubectl")
         .args([

@@ -21,41 +21,35 @@ fn init_logger(level_arg: &str) {
 async fn resolve_remote_target(
     host: &hostspec::HostSpec,
 ) -> Result<(RemoteTarget, kubectl::PodInfo)> {
-    if let Some(ctx) = &host.context {
+    let context = if let Some(ctx) = &host.context {
         kubectl::ensure_context_exists(ctx).await?;
-    }
-    let namespace = if let Some(ns) = host.namespace.clone() {
-        ns
-    } else if let Some(ctx) = &host.context {
-        kubectl::get_context_namespace(ctx)
-            .await?
-            .unwrap_or_default()
+        ctx.clone()
     } else {
-        kubectl::get_context_namespace("default")
-            .await?
-            .unwrap_or_default()
+        kubectl::current_context().await?
     };
+    let namespace = if let Some(ns) = host.namespace.clone() {
+        namespace_or_default(Some(ns))
+    } else {
+        namespace_or_default(kubectl::get_context_namespace(&context).await?)
+    };
+    let ctx_str = context.as_str();
     let ns_str = namespace.as_str();
 
     let pod_name = match &host.target {
         Target::Pod(pod) => pod.clone(),
-        Target::Deployment(dep) => {
-            kubectl::choose_pod_for_deployment(host.context.as_deref(), ns_str, dep)
-                .await
-                .with_context(|| format!("failed to select pod from deployment `{}`", dep))?
-        }
-        Target::Job(job) => kubectl::choose_pod_for_job(host.context.as_deref(), ns_str, job)
+        Target::Deployment(dep) => kubectl::choose_pod_for_deployment(Some(ctx_str), ns_str, dep)
+            .await
+            .with_context(|| format!("failed to select pod from deployment `{}`", dep))?,
+        Target::Job(job) => kubectl::choose_pod_for_job(Some(ctx_str), ns_str, job)
             .await
             .with_context(|| format!("failed to select pod from job `{}`", job))?,
     };
     info!(
         "[sshpod] resolved pod: {} (namespace={}, context={})",
-        pod_name,
-        ns_str,
-        host.context.as_deref().unwrap_or("default")
+        pod_name, ns_str, ctx_str
     );
 
-    let pod_info = kubectl::get_pod_info(host.context.as_deref(), ns_str, &pod_name)
+    let pod_info = kubectl::get_pod_info(Some(ctx_str), ns_str, &pod_name)
         .await
         .with_context(|| format!("failed to inspect pod {}.{}", pod_name, ns_str))?;
 
@@ -78,13 +72,19 @@ async fn resolve_remote_target(
     info!("[sshpod] resolved container: {}", container);
 
     let target = RemoteTarget {
-        context: host.context.clone(),
+        context: Some(context),
         namespace,
         pod: pod_name,
         container,
     };
 
     Ok((target, pod_info))
+}
+
+fn namespace_or_default(namespace: Option<String>) -> String {
+    namespace
+        .filter(|ns| !ns.trim().is_empty())
+        .unwrap_or_else(|| "default".to_string())
 }
 
 pub async fn run(args: ProxyArgs) -> Result<()> {
@@ -132,7 +132,7 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
         pod_name, remote_port
     );
     let (mut forward, local_port) =
-        PortForward::start(host.context.as_deref(), ns_str, &pod_name, remote_port).await?;
+        PortForward::start(target.context.as_deref(), ns_str, &pod_name, remote_port).await?;
     info!(
         "[sshpod] port-forward established: localhost:{} -> {}:{}",
         local_port, pod_name, remote_port
@@ -148,4 +148,24 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
     pump_result?;
     stop_result?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::namespace_or_default;
+
+    #[test]
+    fn namespace_or_default_uses_context_namespace_when_present() {
+        assert_eq!(namespace_or_default(Some("team-a".into())), "team-a");
+    }
+
+    #[test]
+    fn namespace_or_default_falls_back_to_kubernetes_default_namespace() {
+        assert_eq!(namespace_or_default(None), "default");
+    }
+
+    #[test]
+    fn namespace_or_default_treats_blank_namespace_as_missing() {
+        assert_eq!(namespace_or_default(Some(" ".into())), "default");
+    }
 }
