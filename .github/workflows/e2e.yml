@@ -98,8 +98,15 @@ jobs:
           SSHPOD_BIN: /tmp/sshpod-bin/sshpod
         shell: bash
         run: |
-          set -eux
+          set -euxo pipefail
           POD_NAME="sshpod-e2e-${{ matrix.name }}"
           KUBE_CONTEXT="$(kubectl config current-context)"
-          ssh "root@pod--${POD_NAME}.namespace--default.context--${KUBE_CONTEXT}.sshpod" -- echo 'ssh-ok' | tee /tmp/ssh_output
+          HOST="root@pod--${POD_NAME}.namespace--default.context--${KUBE_CONTEXT}.sshpod"
+
+          ssh "$HOST" 'echo ssh-ok' | tee /tmp/ssh_output
           grep 'ssh-ok' /tmp/ssh_output
+
+          printf 'printf "shell-ok\\n"\nexit\n' |
+            timeout 30s ssh -tt "$HOST" |
+            tee /tmp/ssh_shell_output
+          grep 'shell-ok' /tmp/ssh_shell_output

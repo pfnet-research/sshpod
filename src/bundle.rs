@@ -11,7 +11,7 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 use xz2::read::XzDecoder;
 
-pub const BUNDLE_VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "+sshd2");
+pub const BUNDLE_VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "+sshd3");
 #[cfg(test)]
 const BUNDLE_FILE_NAMES: [&str; 3] = ["sshd", "sshd-session", "sshd-auth"];
 const TAR_BLOCK_SIZE: usize = 512;
@@ -69,6 +69,7 @@ pub async fn ensure_bundle(target: &RemoteTarget, base: &str, arch: &str) -> Res
         match install_bundle_archive(target, base, arch, &bundle_data, ArchiveCompression::Xz).await
         {
             Ok(()) => {
+                stop_existing_sshd(target, base).await?;
                 info!("[sshpod] bundle install completed");
                 return Ok(());
             }
@@ -88,6 +89,7 @@ pub async fn ensure_bundle(target: &RemoteTarget, base: &str, arch: &str) -> Res
                 .await
             {
                 Ok(()) => {
+                    stop_existing_sshd(target, base).await?;
                     info!("[sshpod] bundle install completed");
                     return Ok(());
                 }
@@ -109,6 +111,7 @@ pub async fn ensure_bundle(target: &RemoteTarget, base: &str, arch: &str) -> Res
     install_bundle_files(target, base, arch, &files)
         .await
         .with_context(|| format!("failed to install bundle into {}", base))?;
+    stop_existing_sshd(target, base).await?;
 
     info!("[sshpod] bundle install completed");
     Ok(())
@@ -239,6 +242,22 @@ async fn run_remote_shell(
     info!("[sshpod] {}", label);
     kubectl::exec_with_input_target(target, &["sh", "-c", command], input).await?;
     Ok(())
+}
+
+async fn stop_existing_sshd(target: &RemoteTarget, base: &str) -> Result<()> {
+    let command = format!(
+        "set -eu; \
+         pid=\"$(cat \"{base}/sshd.pid\" 2>/dev/null || true)\"; \
+         if [ -n \"$pid\" ]; then kill \"$pid\" 2>/dev/null || true; fi; \
+         rm -f \"{base}/sshd.pid\" \"{base}/sshd.port\""
+    );
+    run_remote_shell(
+        target,
+        &command,
+        &[],
+        "stop existing sshd after bundle update",
+    )
+    .await
 }
 
 fn locate_bundle(arch: &str) -> Result<PathBuf> {
