@@ -25,19 +25,28 @@ while [ $# -gt 0 ]; do
 done
 
 detect_arch() {
-  os="$(uname -s | tr '[:upper:]' '[:lower:]')"
-  arch="$(uname -m)"
-  case "$os" in
-    linux) os_part="linux" ;;
-    darwin) os_part="darwin" ;;
-    *) echo "Unsupported OS: $os" >&2; exit 1 ;;
+  platform="$(uname -s)-$(uname -m)"
+  case "$platform" in
+    Linux-x86_64|Linux-amd64) echo "linux_amd64" ;;
+    Linux-aarch64|Linux-arm64) echo "linux_arm64" ;;
+    Darwin-arm64|Darwin-aarch64) echo "darwin_arm64" ;;
+    Darwin-x86_64|Darwin-amd64)
+      echo "Unsupported platform: macOS Intel is not supported." >&2
+      exit 1
+      ;;
+    Linux-*)
+      echo "Unsupported Linux architecture: ${platform#Linux-}" >&2
+      exit 1
+      ;;
+    Darwin-*)
+      echo "Unsupported macOS architecture: ${platform#Darwin-}" >&2
+      exit 1
+      ;;
+    *)
+      echo "Unsupported platform: $platform" >&2
+      exit 1
+      ;;
   esac
-  case "$arch" in
-    x86_64|amd64) arch_part="amd64" ;;
-    aarch64|arm64) arch_part="arm64" ;;
-    *) echo "Unsupported arch: $arch" >&2; exit 1 ;;
-  esac
-  echo "${os_part}_${arch_part}"
 }
 
 fetch_latest_version() {

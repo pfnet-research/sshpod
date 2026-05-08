@@ -6,7 +6,7 @@
 
 ## Quick start
 
-### Automatic install (Linux/macOS)
+### Automatic install (Linux / Apple Silicon macOS)
 ```bash
 curl -fsSL https://raw.githubusercontent.com/pfnet-research/sshpod/main/install.sh | sh -s -- --yes
 ```
@@ -21,7 +21,7 @@ Set-ExecutionPolicy Bypass -Scope Process -Force; `
 Remove `-Yes` to be prompted before updating `~/.ssh/config`.
 
 ### Manual install
-1. Download the release asset for your OS/arch (`.tar.gz` for Linux/macOS, `.zip` for Windows) and place the binary on your PATH (for example `~/.local/bin/sshpod` or `~/.local/bin/sshpod.exe`).
+1. Download the release asset for your OS/arch (`.tar.gz` for Linux or Apple Silicon macOS, `.zip` for Windows) and place the binary on your PATH (for example `~/.local/bin/sshpod` or `~/.local/bin/sshpod.exe`).
 2. Run `sshpod configure` (backs up `~/.ssh/config` and rewrites the sshpod block), or add the block below yourself—adjust the path if you installed elsewhere:
 ```sshconfig
 Host *.sshpod
