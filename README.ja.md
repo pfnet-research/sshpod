@@ -51,7 +51,7 @@ scp ./local.tgz ubuntu@job--batch.namespace--etl.context--dev.sshpod:/tmp/
 
 ## 要件
 - ローカル: 対象クラスタに到達でき、`exec`/`port-forward` が許可された `kubectl`、OpenSSH クライアント (`ssh`/`scp`/`sftp`) と `ssh-keygen`、`~/.ssh/config` と `~/.cache/sshpod` への書き込み権限。
-- Pod 側: Linux `amd64` または `arm64`、`sh` が利用可能、`/tmp` が書き込み可。`xz`/`gzip` が無くてもプレーン転送にフォールバックし、同梱の `sshd` バイナリが実行できる必要があります。
+- Pod 側: Linux `amd64` または `arm64`、`sh` と `cat` が利用可能、`/tmp` が書き込み可。同梱の `sshd` バイナリ群が実行できる必要があります。`tar` と `xz` または `gzip` があれば高速な bundle 展開に使いますが、必須ではありません。
 
 ## 動作概要
 - `sshpod configure` は `~/.ssh/config` に `Host *.sshpod` ブロックを書き込み（タイムスタンプ付きでバックアップ作成）、ProxyCommand を `sshpod` バイナリに向けます。

@@ -15,7 +15,7 @@ RUN CC="gcc" CFLAGS="-static" LDFLAGS="-static" ./configure \
     --without-pam \
     --without-libedit \
     --disable-strip
-RUN make -j"$(nproc)" sshd
+RUN make -j"$(nproc)" sshd sshd-session sshd-auth
 
 FROM alpine:3.20 AS bundle
 ARG OPENSSH_VERSION
@@ -25,5 +25,8 @@ ARG TARGETARCH
 WORKDIR /tmp/bundle
 RUN apk add --no-cache xz
 RUN mkdir -p /out
-COPY --from=builder /src/openssh-${OPENSSH_VERSION}/sshd /tmp/sshd
-RUN xz -9 /tmp/sshd && mv /tmp/sshd.xz "/out/${BINARY_FILENAME}"
+COPY --from=builder /src/openssh-${OPENSSH_VERSION}/sshd /tmp/bundle/sshd
+COPY --from=builder /src/openssh-${OPENSSH_VERSION}/sshd-session /tmp/bundle/sshd-session
+COPY --from=builder /src/openssh-${OPENSSH_VERSION}/sshd-auth /tmp/bundle/sshd-auth
+RUN chmod 700 sshd sshd-session sshd-auth \
+  && tar cf - sshd sshd-session sshd-auth | xz -9 > "/out/${BINARY_FILENAME}"

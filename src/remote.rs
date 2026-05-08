@@ -174,6 +174,8 @@ while [ $i -lt 30 ]; do
 ListenAddress 127.0.0.1
 Port $PORT
 HostKey $BASE/hostkeys/ssh_host_ed25519_key
+SshdSessionPath $BASE/bundle/sshd-session
+SshdAuthPath $BASE/bundle/sshd-auth
 PidFile $BASE/sshd.pid
 AuthorizedKeysFile $BASE/authorized_keys
 PubkeyAuthentication yes
@@ -245,5 +247,11 @@ mod tests {
         assert!(START_SSHD_SCRIPT.contains("\nAllowTcpForwarding yes\n"));
         assert!(START_SSHD_SCRIPT.contains("\nGatewayPorts clientspecified\n"));
         assert!(!START_SSHD_SCRIPT.contains("\nGatewayPorts yes\n"));
+    }
+
+    #[test]
+    fn start_script_uses_bundled_openssh_helper_binaries() {
+        assert!(START_SSHD_SCRIPT.contains("\nSshdSessionPath $BASE/bundle/sshd-session\n"));
+        assert!(START_SSHD_SCRIPT.contains("\nSshdAuthPath $BASE/bundle/sshd-auth\n"));
     }
 }

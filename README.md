@@ -52,7 +52,7 @@ scp ./local.tgz ubuntu@job--batch.namespace--etl.context--dev.sshpod:/tmp/
 
 ## Requirements
 - Local: `kubectl` configured for the target cluster with permission to `exec` and `port-forward`; OpenSSH client tools (`ssh`/`scp`/`sftp`) and `ssh-keygen`; ability to write to `~/.ssh/config` and `~/.cache/sshpod`.
-- In the container: Linux `amd64` or `arm64`; `sh` available; `/tmp` writable. `xz`/`gzip` are optional—sshpod falls back to a plain transfer if needed—and the bundled `sshd` binary must be allowed to run.
+- In the container: Linux `amd64` or `arm64`; `sh` and `cat` available; `/tmp` writable; the bundled `sshd` binaries must be allowed to run. If `tar` plus `xz` or `gzip` are available, sshpod uses them for faster bundle extraction, but they are optional.
 
 ## How it works
 - `sshpod configure` writes a `Host *.sshpod` block into `~/.ssh/config` with a timestamped backup, pointing ProxyCommand at the `sshpod` binary.
