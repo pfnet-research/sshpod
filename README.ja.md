@@ -5,7 +5,7 @@
 
 ## クイックスタート
 
-### 方法1: 自動 (Linux/macOS)
+### 方法1: 自動 (Linux / Apple Silicon macOS)
 ```bash
 curl -fsSL https://raw.githubusercontent.com/pfnet-research/sshpod/main/install.sh | sh -s -- --yes
 ```
@@ -20,7 +20,7 @@ Set-ExecutionPolicy Bypass -Scope Process -Force; `
 `-Yes` を外すと `~/.ssh/config` 更新前に確認します。
 
 ### 方法2: 手動
-1. リリースから OS/アーキテクチャに合うアセット（Linux/macOS は `.tar.gz`、Windows は `.zip`）をダウンロードし、PATH（例: `~/.local/bin/sshpod` または `~/.local/bin/sshpod.exe`）に置きます。
+1. リリースから OS/アーキテクチャに合うアセット（Linux または Apple Silicon macOS は `.tar.gz`、Windows は `.zip`）をダウンロードし、PATH（例: `~/.local/bin/sshpod` または `~/.local/bin/sshpod.exe`）に置きます。
 2. `sshpod configure` を実行する（`~/.ssh/config` をバックアップしつつ sshpod 用ブロックを書き換えます）、または次のブロックを自分で追加してください。バイナリの設置場所に合わせてパスを調整してください:
 ```sshconfig
 Host *.sshpod
