@@ -163,6 +163,55 @@ struct JobStatus {
     ready: Option<u32>,
 }
 
+#[derive(Deserialize)]
+struct KubeConfig {
+    #[serde(default, rename = "current-context")]
+    current_context: Option<String>,
+    #[serde(default)]
+    contexts: Vec<KubeContextEntry>,
+}
+
+#[derive(Deserialize)]
+struct KubeContextEntry {
+    name: String,
+    #[serde(default)]
+    context: KubeContext,
+}
+
+#[derive(Default, Deserialize)]
+struct KubeContext {
+    #[serde(default)]
+    namespace: Option<String>,
+}
+
+impl KubeConfig {
+    fn context_names(&self) -> Vec<String> {
+        self.contexts
+            .iter()
+            .map(|c| c.name.trim().to_string())
+            .filter(|name| !name.is_empty())
+            .collect()
+    }
+
+    fn current_context(&self) -> Option<String> {
+        self.current_context
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+    }
+
+    fn namespace_for(&self, context: &str) -> Option<String> {
+        self.contexts
+            .iter()
+            .find(|c| c.name == context)
+            .and_then(|c| c.context.namespace.as_deref())
+            .map(str::trim)
+            .filter(|namespace| !namespace.is_empty())
+            .map(str::to_string)
+    }
+}
+
 fn kubectl_base(context: Option<&str>) -> Command {
     let mut cmd = Command::new("kubectl");
     if let Some(ctx) = context {
@@ -226,70 +275,22 @@ pub async fn ensure_context_exists(context: &str) -> Result<()> {
 }
 
 pub async fn list_contexts() -> Result<Vec<String>> {
-    let output = Command::new("kubectl")
-        .args(["config", "get-contexts", "-o", "name"])
-        .output()
-        .await
-        .context("failed to run kubectl config get-contexts")?;
-    if !output.status.success() {
-        bail!(
-            "kubectl config get-contexts failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
-    let list = String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect();
-    Ok(list)
+    Ok(kube_config().await?.context_names())
 }
 
 pub async fn current_context() -> Result<String> {
-    let output = Command::new("kubectl")
-        .args(["config", "current-context"])
-        .output()
-        .await
-        .context("failed to run kubectl config current-context")?;
-    if !output.status.success() {
-        bail!(
-            "kubectl config current-context failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
-    let context = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if context.is_empty() {
-        bail!("kubectl config current-context returned an empty context");
-    }
-    Ok(context)
+    kube_config()
+        .await?
+        .current_context()
+        .context("kubectl config view returned an empty current-context")
 }
 
 pub async fn get_context_namespace(context: &str) -> Result<Option<String>> {
-    let output = Command::new("kubectl")
-        .args([
-            "config",
-            "view",
-            "-o",
-            &format!(
-                "jsonpath={{.contexts[?(@.name==\"{}\")].context.namespace}}",
-                context
-            ),
-        ])
-        .output()
-        .await
-        .context("failed to run kubectl config view")?;
-    if !output.status.success() {
-        bail!(
-            "kubectl config view failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
-    let ns = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if ns.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(ns))
-    }
+    Ok(kube_config().await?.namespace_for(context))
+}
+
+async fn kube_config() -> Result<KubeConfig> {
+    run_kubectl_json(None, &["config", "view", "-o", "json"], "config view").await
 }
 
 pub async fn get_pod_info(context: Option<&str>, namespace: &str, pod: &str) -> Result<PodInfo> {
@@ -729,5 +730,45 @@ mod tests {
             }),
         };
         assert!(!is_ready(&pod));
+    }
+
+    #[test]
+    fn kube_config_finds_namespace_for_quoted_context_name() {
+        let config: KubeConfig = serde_json::from_str(
+            r#"{
+                "current-context": "dev\"\\ctx",
+                "contexts": [
+                    {
+                        "name": "dev\"\\ctx",
+                        "context": {"namespace": "team-a"}
+                    }
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.current_context().as_deref(), Some(r#"dev"\ctx"#));
+        assert_eq!(
+            config.namespace_for(r#"dev"\ctx"#).as_deref(),
+            Some("team-a")
+        );
+        assert_eq!(config.context_names(), vec![r#"dev"\ctx"#.to_string()]);
+    }
+
+    #[test]
+    fn kube_config_treats_blank_namespace_as_missing() {
+        let config: KubeConfig = serde_json::from_str(
+            r#"{
+                "contexts": [
+                    {
+                        "name": "dev",
+                        "context": {"namespace": " "}
+                    }
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.namespace_for("dev"), None);
     }
 }
