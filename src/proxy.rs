@@ -99,7 +99,21 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
     let ns_str = target.namespace.as_str();
     let pod_name = target.pod.clone();
     let container = target.container.clone();
-    let base = format!("/tmp/sshpod/{}/{}", pod_info.uid, container);
+    let mut inherit_env = args.inherit_env;
+    inherit_env.sort_unstable();
+    inherit_env.dedup();
+    let container_id = pod_info
+        .container_ids
+        .get(&container)
+        .context("target container has not started yet")?;
+    let base = remote::session_directory(
+        &pod_info.uid,
+        &container,
+        container_id,
+        &login_user,
+        &inherit_env,
+    );
+    remote::assert_login_user_allowed(&target, &login_user, !inherit_env.is_empty()).await?;
 
     let local_key = keys::ensure_key("id_ed25519")
         .await
@@ -107,9 +121,6 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
     let host_keys = keys::ensure_key("ssh_host_ed25519_key")
         .await
         .context("failed to create host keys")?;
-
-    remote::try_acquire_lock(&target, &base).await;
-    remote::assert_login_user_allowed(&target, &login_user).await?;
 
     let arch = bundle::detect_remote_arch(&target)
         .await
@@ -121,7 +132,8 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
 
     info!("[sshpod] starting/ensuring sshd in pod {}", pod_name);
     let remote_port =
-        remote::ensure_sshd_running(&target, &base, &login_user, &local_key.public).await?;
+        remote::ensure_sshd_running(&target, &base, &login_user, &local_key.public, &inherit_env)
+            .await?;
     info!(
         "[sshpod] sshd is listening on 127.0.0.1:{} (pod {})",
         remote_port, pod_name

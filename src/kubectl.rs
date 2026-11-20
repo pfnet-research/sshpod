@@ -17,12 +17,29 @@ pub struct RemoteTarget {
 pub struct PodInfo {
     pub uid: String,
     pub containers: Vec<String>,
+    pub container_ids: HashMap<String, String>,
 }
 
 #[derive(Deserialize)]
 struct Pod {
     metadata: PodMetadata,
     spec: PodSpec,
+    #[serde(default)]
+    status: PodContainerStatuses,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PodContainerStatuses {
+    #[serde(default)]
+    container_statuses: Vec<ContainerStatus>,
+}
+
+#[derive(Deserialize)]
+struct ContainerStatus {
+    name: String,
+    #[serde(rename = "containerID")]
+    container_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -306,6 +323,12 @@ pub async fn get_pod_info(context: Option<&str>, namespace: &str, pod: &str) -> 
     Ok(PodInfo {
         uid: parsed.metadata.uid,
         containers: parsed.spec.containers.into_iter().map(|c| c.name).collect(),
+        container_ids: parsed
+            .status
+            .container_statuses
+            .into_iter()
+            .filter_map(|status| status.container_id.map(|id| (status.name, id)))
+            .collect(),
     })
 }
 

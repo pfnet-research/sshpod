@@ -1,4 +1,4 @@
-use crate::{install, proxy};
+use crate::{install, proxy, remote};
 use anyhow::{anyhow, Result};
 use clap::{Args, Parser, Subcommand};
 
@@ -32,6 +32,9 @@ pub struct ProxyArgs {
     /// OpenSSH-supplied port (unused but accepted for compatibility)
     #[arg(long)]
     pub port: Option<u16>,
+    /// Copy one variable from the target container into SSH sessions (repeatable)
+    #[arg(long, value_name = "NAME", value_parser = remote::parse_inherited_env)]
+    pub inherit_env: Vec<String>,
     /// Log level: error, info, debug
     #[arg(long, default_value = "info")]
     pub log_level: String,

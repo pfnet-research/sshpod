@@ -49,13 +49,35 @@ scp ./local.tgz ubuntu@job--batch.namespace--etl.context--dev.sshpod:/tmp/
 - Pod が非 root で動いている場合、SSH ユーザはコンテナ内の実ユーザと一致させてください。root Pod であれば任意のユーザで接続できます。
 - リモートポートフォワードでは、クライアントが指定した bind address を尊重します。例えば `ssh -R 0.0.0.0:18000:127.0.0.1:8000 ...sshpod` は Pod ネットワーク上で `18000` を公開し、bind address を省略した場合は OpenSSH のデフォルトどおり localhost のみに留まります。
 
+### コンテナの環境変数を指定して引き継ぐ
+
+既定では、SSH セッションは OpenSSH が用意する環境を使います。
+接続先のコンテナで `kubectl exec` に渡される環境変数を追加したい場合は、
+`ProxyCommand` に `--inherit-env NAME` を必要な数だけ指定します。
+`~/.ssh/config` では、ホストごとの設定を共通の `Host *.sshpod` よりも先に書きます。
+
+```sshconfig
+Host pod--api.namespace--default.context--dev.sshpod
+  ProxyCommand ~/.local/bin/sshpod proxy --host %h --user %r --port %p --inherit-env APP_MODE --inherit-env PATH
+```
+
+SSH のログインユーザと `kubectl exec` の実行ユーザが同じ場合に使えます。
+未設定の変数は省略し、空の値はそのまま渡します。値に改行は含められません。
+ログインユーザ、端末、接続、ロケールの変数は OpenSSH が設定します。
+`BASH_ENV` や `LD_PRELOAD` など、シェルやプログラムの起動時に使われる変数も指定できません。
+
+Pod 内の `kubectl` を自動引き継ぎに頼って使っていた場合は、Workspace 側で kubeconfig を管理する方法を推奨します。
+接続先を Pod 内で自動検出する構成を使い続ける場合は、`KUBERNETES_SERVICE_HOST` と
+`KUBERNETES_SERVICE_PORT` を明示し、必要に応じて `PATH` や `KUBECONFIG` も指定してください。
+値は対象のデーモンを起動するときに取得し、同じ指定で後から接続するときに再利用します。
+
 ## 要件
 - ローカル: 対象クラスタに到達でき、`exec`/`port-forward` が許可された `kubectl`、OpenSSH クライアント (`ssh`/`scp`/`sftp`) と `ssh-keygen`、`~/.ssh/config` と `~/.cache/sshpod` への書き込み権限。
 - Pod 側: Linux `amd64` または `arm64`、`sh` と `cat` が利用可能、`/tmp` が書き込み可。同梱の `sshd` バイナリ群が実行できる必要があります。`tar` と `xz` または `gzip` があれば高速な bundle 展開に使いますが、必須ではありません。
 
 ## 動作概要
 - `sshpod configure` は `~/.ssh/config` に `Host *.sshpod` ブロックを書き込み（タイムスタンプ付きでバックアップ作成）、ProxyCommand を `sshpod` バイナリに向けます。
-- 初回接続時に `~/.cache/sshpod/id_ed25519` を作成し、Pod 内 `/tmp/sshpod/<pod-uid>/<container>` にアーキテクチャ適合の `sshd` バンドルを配置、ホスト鍵をインストールして `127.0.0.1` で起動します。
+- 初回接続時に `~/.cache/sshpod/id_ed25519` を作成し、Pod 内の `/tmp/sshpod` 以下にアーキテクチャ適合の `sshd` バンドルを配置します。ホスト鍵をインストールし、`127.0.0.1` で起動します。
 - `kubectl port-forward` でその `sshd` に接続し、`/tmp/sshpod` に残っている間は同じバンドルとホスト鍵を再利用します。
 
 ## 開発メモ

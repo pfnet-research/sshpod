@@ -1,28 +1,109 @@
 use crate::keys::Key;
 use crate::kubectl::{self, RemoteTarget};
 use anyhow::{bail, Context, Result};
+use sha2::{Digest, Sha256};
 use tokio::time::{timeout, Duration};
 
-pub async fn try_acquire_lock(target: &RemoteTarget, base: &str) {
-    let lock_cmd = format!("umask 077; mkdir \"{}/lock\"", base);
-    let _ = kubectl::exec_capture_optional_target(target, &["sh", "-c", &lock_cmd]).await;
+pub(crate) fn parse_inherited_env(name: &str) -> Result<String, String> {
+    let mut bytes = name.bytes();
+    if !bytes
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == b'_')
+        || !bytes.all(|c| c.is_ascii_alphanumeric() || c == b'_')
+    {
+        return Err("expected a POSIX environment variable name".into());
+    }
+
+    if matches!(
+        name,
+        "HOME"
+            | "USER"
+            | "LOGNAME"
+            | "SHELL"
+            | "TERM"
+            | "LANG"
+            | "LANGUAGE"
+            | "DISPLAY"
+            | "XAUTHORITY"
+            | "MAIL"
+            | "PWD"
+            | "OLDPWD"
+            | "SHLVL"
+            | "_"
+            | "BASH_ENV"
+            | "ENV"
+            | "IFS"
+            | "SHELLOPTS"
+            | "BASHOPTS"
+            | "PROMPT_COMMAND"
+    ) || ["SSH_", "LC_", "LD_", "DYLD_"]
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
+    {
+        return Err(format!(
+            "{name} is reserved for the SSH session or process startup"
+        ));
+    }
+
+    Ok(name.into())
 }
 
-pub async fn assert_login_user_allowed(target: &RemoteTarget, login_user: &str) -> Result<()> {
-    let uid = kubectl::exec_capture_target(target, &["id", "-u"])
-        .await
-        .context("failed to read remote uid")?;
-    if uid.trim() == "0" {
-        return Ok(());
+pub(crate) fn session_directory(
+    pod_uid: &str,
+    container: &str,
+    container_id: &str,
+    login_user: &str,
+    inherited_env: &[String],
+) -> String {
+    // Reuse an sshd only within the same container instance and environment policy.
+    let mut hash = Sha256::new();
+    let policy_user = if inherited_env.is_empty() {
+        ""
+    } else {
+        login_user
+    };
+    for part in [container_id, policy_user]
+        .into_iter()
+        .chain(inherited_env.iter().map(String::as_str))
+    {
+        hash.update(part.as_bytes());
+        hash.update([0]);
     }
+    format!(
+        "/tmp/sshpod/{pod_uid}/{container}-session-v1-{:x}",
+        hash.finalize()
+    )
+}
+
+pub async fn assert_login_user_allowed(
+    target: &RemoteTarget,
+    login_user: &str,
+    inherit_env: bool,
+) -> Result<()> {
     let remote_user = kubectl::exec_capture_target(target, &["id", "-un"])
         .await
         .context("failed to read remote user")?;
-    if remote_user.trim() != login_user {
+    if inherit_env
+        && !login_user
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b"_.-".contains(&c))
+    {
+        bail!("--inherit-env requires a login name that sshd can match literally");
+    }
+    if remote_user == login_user {
+        return Ok(());
+    }
+    if inherit_env {
+        bail!("--inherit-env requires logging in as the user that runs kubectl exec");
+    }
+    let uid = kubectl::exec_capture_target(target, &["id", "-u"])
+        .await
+        .context("failed to read remote uid")?;
+    if uid != "0" {
         bail!(
             "This Pod runs as non-root. Use the container user for login (requested: {}, required: {}).",
             login_user,
-            remote_user.trim()
+            remote_user
         );
     }
     Ok(())
@@ -36,8 +117,9 @@ pub async fn install_host_keys(target: &RemoteTarget, base: &str, host_keys: &Ke
 BASE="{base}"
 PRIV="$BASE/hostkeys/ssh_host_ed25519_key"
 PUB="$BASE/hostkeys/ssh_host_ed25519_key.pub"
-TMP_PRIV="$BASE/hostkeys/.tmp_priv"
-TMP_PUB="$BASE/hostkeys/.tmp_pub"
+TMP_PRIV="$BASE/hostkeys/.tmp_priv.$$"
+TMP_PUB="$BASE/hostkeys/.tmp_pub.$$"
+trap 'rm -f "$TMP_PRIV" "$TMP_PUB"' EXIT
 umask 077
 mkdir -p "$BASE" "$BASE/hostkeys" "$BASE/logs"
 chmod 700 "$BASE" "$BASE/hostkeys"
@@ -67,14 +149,13 @@ pub async fn ensure_sshd_running(
     base: &str,
     login_user: &str,
     pubkey_line: &str,
+    inherited_env: &[String],
 ) -> Result<u16> {
+    let mut command = vec!["sh", "-s", "--", base, login_user, pubkey_line];
+    command.extend(inherited_env.iter().map(String::as_str));
     let script = START_SSHD_SCRIPT.as_bytes();
     let output = timeout(Duration::from_secs(40), {
-        kubectl::exec_with_input_target(
-            target,
-            &["sh", "-s", "--", base, login_user, pubkey_line],
-            script,
-        )
+        kubectl::exec_with_input_target(target, &command, script)
     })
     .await
     .map_err(|_| anyhow::anyhow!("starting sshd timed out after 40s"))?
@@ -93,6 +174,7 @@ set -eu
 BASE="$1"
 LOGIN_USER="$2"
 PUBKEY_LINE="$3"
+shift 3
 SSHD="$BASE/bundle/sshd"
 
 exec 3>&1
@@ -115,7 +197,20 @@ chmod 700 "$BASE" "$BASE/hostkeys" "$BASE/logs"
 BASE_PARENT="$(dirname "$BASE")"
 TOP_DIR="$(dirname "$BASE_PARENT")"
 chmod 711 "$TOP_DIR" "$BASE_PARENT"
-debug_log "start script begin (base=$BASE user=$LOGIN_USER)"
+debug_log "start script begin (base=$BASE)"
+
+# Multiple SSH clients may start the same policy at once. Only one writes its config.
+attempt=0
+until mkdir "$BASE/start.lock" 2>/dev/null; do
+  attempt=$((attempt+1))
+  if [ "$attempt" -ge 15 ]; then
+    echo "timed out waiting for sshd startup lock" >&2
+    exit 1
+  fi
+  sleep 1
+done
+trap 'rmdir "$BASE/start.lock"' EXIT
+trap 'exit 1' HUP INT TERM
 
 have_user() {
   if command -v getent >/dev/null 2>&1; then
@@ -162,8 +257,30 @@ rand_port() {
   echo $((20000 + (val % 45000)))
 }
 
-REMOTE_PATH="${PATH:-/usr/bin:/bin}"
-ENV_EXPORTS="$(env | awk -F= '/^KUBERNETES_/ {print $1}')"
+# Check the identity again in the same exec call that reads the environment.
+if [ "$#" -gt 0 ] && [ "$(id -un)" != "$LOGIN_USER" ]; then
+  echo "--inherit-env requires logging in as the user that runs kubectl exec" >&2
+  exit 1
+fi
+
+# Collect only explicit names. Keep the sentinel so command substitution does not
+# discard newlines that belong to the value. Remove it and printenv's line ending.
+SET_ENV=""
+CR="$(printf '\r')"
+for key do
+  if value="$(printenv "$key" && printf '.')"; then
+    value="${value%?}"
+    value="${value%?}"
+    case "$value" in
+      *"$CR"*|*'
+'*)
+        printf 'cannot inherit %s: multiline values are not supported by sshd SetEnv\n' "$key" >&2
+        exit 1
+        ;;
+    esac
+    SET_ENV="$SET_ENV$(append_setenv_arg "$key" "$value")"
+  fi
+done
 
 i=0
 while [ $i -lt 30 ]; do
@@ -192,22 +309,12 @@ Subsystem sftp internal-sftp
 LogLevel VERBOSE
 EOF
 
-  # Keep session environment in sshd_config so startup does not depend on
-  # whether the target home lives on NFS or has a managed ~/.ssh symlink.
-  # sshd_config only honors the first SetEnv directive, so all vars must be
-  # emitted on a single line.
-  {
-    printf 'SetEnv'
-    append_setenv_arg PATH "$REMOTE_PATH"
-    for key in $ENV_EXPORTS; do
-      val="$(printenv "$key" || true)"
-      append_setenv_arg "$key" "$val"
-    done
-    if [ -n "${KUBECONFIG:-}" ]; then
-      append_setenv_arg KUBECONFIG "$KUBECONFIG"
+  if [ "$#" -gt 0 ]; then
+    printf 'AllowUsers %s\n' "$LOGIN_USER" >> "$BASE/sshd_config"
+    if [ -n "$SET_ENV" ]; then
+      printf 'SetEnv%s\n' "$SET_ENV" >> "$BASE/sshd_config"
     fi
-    printf '\n'
-  } >> "$BASE/sshd_config"
+  fi
 
   chmod 600 "$BASE/sshd_config"
   rm -f "$BASE/sshd.pid"
@@ -233,13 +340,55 @@ exit 1
 
 #[cfg(test)]
 mod tests {
-    use super::START_SSHD_SCRIPT;
+    use super::{parse_inherited_env, session_directory, START_SSHD_SCRIPT};
+
+    #[test]
+    fn inheritance_allows_only_explicit_non_session_names() {
+        for accepted in ["PATH", "KUBERNETES_SERVICE_HOST", "KUBECONFIG", "_APP_1"] {
+            assert_eq!(parse_inherited_env(accepted).unwrap(), accepted);
+        }
+        for rejected in [
+            "",
+            "A=B",
+            "A B",
+            "1ABC",
+            "SSH_AUTH_SOCK",
+            "TERM",
+            "HOME",
+            "USER",
+            "SHELL",
+            "LANG",
+            "LC_ALL",
+            "LD_PRELOAD",
+            "BASH_ENV",
+        ] {
+            assert!(parse_inherited_env(rejected).is_err(), "{rejected}");
+        }
+    }
+
+    #[test]
+    fn different_container_instances_and_policies_do_not_share_an_sshd() {
+        let env = vec!["MY_VAR".to_string()];
+        let base = session_directory("pod", "main", "containerd://one", "root", &env);
+        assert_ne!(
+            base,
+            session_directory("pod", "main", "containerd://two", "root", &env)
+        );
+        assert_ne!(
+            base,
+            session_directory("pod", "main", "containerd://one", "other", &env)
+        );
+        assert_ne!(
+            base,
+            session_directory("pod", "main", "containerd://one", "root", &[])
+        );
+    }
 
     #[test]
     fn start_script_avoids_user_home_side_effects() {
         assert!(!START_SSHD_SCRIPT.contains(".ssh/environment"));
         assert!(!START_SSHD_SCRIPT.contains("PermitUserEnvironment yes"));
-        assert!(START_SSHD_SCRIPT.contains("append_setenv_arg PATH"));
+        assert!(!START_SSHD_SCRIPT.contains("KUBERNETES_"));
     }
 
     #[test]
