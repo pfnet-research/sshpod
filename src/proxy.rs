@@ -108,7 +108,6 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
         .await
         .context("failed to create host keys")?;
 
-    remote::try_acquire_lock(&target, &base).await;
     remote::assert_login_user_allowed(&target, &login_user).await?;
 
     let arch = bundle::detect_remote_arch(&target)

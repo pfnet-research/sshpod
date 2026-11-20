@@ -49,6 +49,13 @@ scp ./local.tgz ubuntu@job--batch.namespace--etl.context--dev.sshpod:/tmp/
 - Pod が非 root で動いている場合、SSH ユーザはコンテナ内の実ユーザと一致させてください。root Pod であれば任意のユーザで接続できます。
 - リモートポートフォワードでは、クライアントが指定した bind address を尊重します。例えば `ssh -R 0.0.0.0:18000:127.0.0.1:8000 ...sshpod` は Pod ネットワーク上で `18000` を公開し、bind address を省略した場合は OpenSSH のデフォルトどおり localhost のみに留まります。
 
+### セッションの環境変数
+
+SSH セッションは、接続先のコンテナで `kubectl exec` に渡される環境変数を引き継ぎます。
+コンテナイメージや Pod の定義で設定された変数も含みます。
+`HOME`、`USER`、`SHELL`、`TERM`、`SSH_*` など、ログインに属する変数は sshd が設定します。
+値が複数行にわたる変数は sshd で渡せないため、引き継ぎません。
+
 ## 要件
 - ローカル: 対象クラスタに到達でき、`exec`/`port-forward` が許可された `kubectl`、OpenSSH クライアント (`ssh`/`scp`/`sftp`) と `ssh-keygen`、`~/.ssh/config` と `~/.cache/sshpod` への書き込み権限。
 - Pod 側: Linux `amd64` または `arm64`、`sh` と `cat` が利用可能、`/tmp` が書き込み可。同梱の `sshd` バイナリ群が実行できる必要があります。`tar` と `xz` または `gzip` があれば高速な bundle 展開に使いますが、必須ではありません。

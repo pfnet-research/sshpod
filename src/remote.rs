@@ -3,11 +3,6 @@ use crate::kubectl::{self, RemoteTarget};
 use anyhow::{bail, Context, Result};
 use tokio::time::{timeout, Duration};
 
-pub async fn try_acquire_lock(target: &RemoteTarget, base: &str) {
-    let lock_cmd = format!("umask 077; mkdir \"{}/lock\"", base);
-    let _ = kubectl::exec_capture_optional_target(target, &["sh", "-c", &lock_cmd]).await;
-}
-
 pub async fn assert_login_user_allowed(target: &RemoteTarget, login_user: &str) -> Result<()> {
     let uid = kubectl::exec_capture_target(target, &["id", "-u"])
         .await
@@ -36,8 +31,9 @@ pub async fn install_host_keys(target: &RemoteTarget, base: &str, host_keys: &Ke
 BASE="{base}"
 PRIV="$BASE/hostkeys/ssh_host_ed25519_key"
 PUB="$BASE/hostkeys/ssh_host_ed25519_key.pub"
-TMP_PRIV="$BASE/hostkeys/.tmp_priv"
-TMP_PUB="$BASE/hostkeys/.tmp_pub"
+TMP_PRIV="$BASE/hostkeys/.tmp_priv.$$"
+TMP_PUB="$BASE/hostkeys/.tmp_pub.$$"
+trap 'rm -f "$TMP_PRIV" "$TMP_PUB"' EXIT
 umask 077
 mkdir -p "$BASE" "$BASE/hostkeys" "$BASE/logs"
 chmod 700 "$BASE" "$BASE/hostkeys"
@@ -102,13 +98,6 @@ debug_log() {
   printf '[sshpod] %s\n' "$1" >&2
 }
 
-append_setenv_arg() {
-  key="$1"
-  value="$2"
-  escaped="$(printf '%s=%s' "$key" "$value" | sed 's/[\\"]/\\&/g')"
-  printf ' "%s"' "$escaped"
-}
-
 umask 077
 mkdir -p "$BASE" "$BASE/logs" "$BASE/hostkeys"
 chmod 700 "$BASE" "$BASE/hostkeys" "$BASE/logs"
@@ -116,6 +105,23 @@ BASE_PARENT="$(dirname "$BASE")"
 TOP_DIR="$(dirname "$BASE_PARENT")"
 chmod 711 "$TOP_DIR" "$BASE_PARENT"
 debug_log "start script begin (base=$BASE user=$LOGIN_USER)"
+
+# Let concurrent clients start one sshd between them. A lock left behind by a
+# killed script is ignored after 20 seconds instead of blocking every later login.
+waited=0
+until mkdir "$BASE/start.lock" 2>/dev/null || [ "$waited" -ge 20 ]; do
+  waited=$((waited+1))
+  sleep 1
+done
+trap 'rmdir "$BASE/start.lock" 2>/dev/null || true' EXIT
+trap 'exit 1' HUP INT TERM
+
+# A pid file can outlive its container when /tmp is a volume, so check that the
+# pid still belongs to this sshd rather than to an unrelated process.
+sshd_running() {
+  pid="$(cat "$BASE/sshd.pid" 2>/dev/null)" &&
+    grep -qF "$BASE/sshd_config" "/proc/$pid/cmdline" 2>/dev/null
+}
 
 have_user() {
   if command -v getent >/dev/null 2>&1; then
@@ -150,29 +156,29 @@ if [ ! -f "$BASE/hostkeys/ssh_host_ed25519_key" ]; then
 fi
 chmod 600 "$BASE/hostkeys/"*
 
-if [ -f "$BASE/sshd.pid" ] && kill -0 "$(cat "$BASE/sshd.pid")" && [ -f "$BASE/sshd.port" ]; then
-  debug_log "sshd already running"
-  cat "$BASE/sshd.port" >&3
-  exit 0
-fi
-debug_log "sshd not running, starting new instance"
+# Sessions start from the environment that kubectl exec provides, which includes
+# the variables of the image and the Pod spec. sshd keeps the variables it sets
+# for each login, and a value with a newline cannot be written to sshd_config.
+SET_ENV="$(awk 'BEGIN {
+  for (name in ENVIRON) {
+    value = ENVIRON[name]
+    if (name !~ /^[A-Za-z_][A-Za-z0-9_]*$/ || index(value, "\n") ||
+        name ~ /^(HOME|USER|LOGNAME|SHELL|MAIL|TERM|DISPLAY|PWD|OLDPWD|SHLVL|_|SSH_.*)$/)
+      continue
+    quoted = ""
+    for (i = 1; i <= length(value); i++) {
+      c = substr(value, i, 1)
+      quoted = quoted (c == "\\" || c == "\"" ? "\\" : "") c
+    }
+    printf "\"%s=%s\"\n", name, quoted
+  }
+}' | sort | tr '\n' ' ')"
 
-rand_port() {
-  val="$(od -An -N2 -tu2 /dev/urandom | tr -d ' ')"
-  echo $((20000 + (val % 45000)))
-}
-
-REMOTE_PATH="${PATH:-/usr/bin:/bin}"
-ENV_EXPORTS="$(env | awk -F= '/^KUBERNETES_/ {print $1}')"
-
-i=0
-while [ $i -lt 30 ]; do
-  i=$((i+1))
-  PORT="$(rand_port)"
-
-  cat > "$BASE/sshd_config" <<EOF
+# sshd honors only the first SetEnv directive, so all variables share one line.
+write_config() {
+  cat <<EOF
 ListenAddress 127.0.0.1
-Port $PORT
+Port $1
 HostKey $BASE/hostkeys/ssh_host_ed25519_key
 SshdSessionPath $BASE/bundle/sshd-session
 SshdAuthPath $BASE/bundle/sshd-auth
@@ -191,33 +197,39 @@ X11Forwarding no
 Subsystem sftp internal-sftp
 LogLevel VERBOSE
 EOF
+  [ -z "$SET_ENV" ] || printf 'SetEnv %s\n' "$SET_ENV"
+}
 
-  # Keep session environment in sshd_config so startup does not depend on
-  # whether the target home lives on NFS or has a managed ~/.ssh symlink.
-  # sshd_config only honors the first SetEnv directive, so all vars must be
-  # emitted on a single line.
-  {
-    printf 'SetEnv'
-    append_setenv_arg PATH "$REMOTE_PATH"
-    for key in $ENV_EXPORTS; do
-      val="$(printenv "$key" || true)"
-      append_setenv_arg "$key" "$val"
-    done
-    if [ -n "${KUBECONFIG:-}" ]; then
-      append_setenv_arg KUBECONFIG "$KUBECONFIG"
-    fi
-    printf '\n'
-  } >> "$BASE/sshd_config"
+# Reuse the daemon only while it runs the configuration this script would write,
+# so one started by another sshpod version is replaced. Open sessions stay up.
+if sshd_running; then
+  PORT="$(cat "$BASE/sshd.port" 2>/dev/null || true)"
+  if write_config "$PORT" | cmp -s - "$BASE/sshd_config"; then
+    debug_log "sshd already running"
+    echo "$PORT" >&3
+    exit 0
+  fi
+  kill "$pid" 2>/dev/null || true
+fi
+debug_log "starting sshd"
 
-  chmod 600 "$BASE/sshd_config"
+rand_port() {
+  val="$(od -An -N2 -tu2 /dev/urandom | tr -d ' ')"
+  echo $((20000 + (val % 45000)))
+}
+
+i=0
+while [ $i -lt 30 ]; do
+  i=$((i+1))
+  PORT="$(rand_port)"
+  write_config "$PORT" > "$BASE/sshd_config"
   rm -f "$BASE/sshd.pid"
   debug_log "launching sshd on $PORT"
   "$SSHD" -f "$BASE/sshd_config" -E "$BASE/logs/sshd.log" </dev/null || true
   j=0
   while [ $j -lt 10 ]; do
-    if [ -f "$BASE/sshd.pid" ] && kill -0 "$(cat "$BASE/sshd.pid")"; then
+    if sshd_running; then
       echo "$PORT" > "$BASE/sshd.port"
-      chmod 600 "$BASE/sshd.pid" "$BASE/sshd.port"
       echo "$PORT" >&3
       exit 0
     fi
@@ -239,7 +251,6 @@ mod tests {
     fn start_script_avoids_user_home_side_effects() {
         assert!(!START_SSHD_SCRIPT.contains(".ssh/environment"));
         assert!(!START_SSHD_SCRIPT.contains("PermitUserEnvironment yes"));
-        assert!(START_SSHD_SCRIPT.contains("append_setenv_arg PATH"));
     }
 
     #[test]

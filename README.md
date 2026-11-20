@@ -50,6 +50,14 @@ scp ./local.tgz ubuntu@job--batch.namespace--etl.context--dev.sshpod:/tmp/
 - Pods running as non-root require you to SSH as that user; root Pods accept any SSH user.
 - Remote port forwarding honors the bind address requested by the client. For example, `ssh -R 0.0.0.0:18000:127.0.0.1:8000 ...sshpod` exposes port `18000` on the Pod network, while omitting the bind address keeps OpenSSH's loopback-only default.
 
+### Session environment
+
+SSH sessions start with the environment that `kubectl exec` provides in the
+target container, including variables from the image and the Pod spec. sshd
+still sets the variables that belong to the login, such as `HOME`, `USER`,
+`SHELL`, `TERM`, and `SSH_*`. A value that spans multiple lines cannot be
+passed through sshd and is left out.
+
 ## Requirements
 - Local: `kubectl` configured for the target cluster with permission to `exec` and `port-forward`; OpenSSH client tools (`ssh`/`scp`/`sftp`) and `ssh-keygen`; ability to write to `~/.ssh/config` and `~/.cache/sshpod`.
 - In the container: Linux `amd64` or `arm64`; `sh` and `cat` available; `/tmp` writable; the bundled `sshd` binaries must be allowed to run. If `tar` plus `xz` or `gzip` are available, sshpod uses them for faster bundle extraction, but they are optional.
