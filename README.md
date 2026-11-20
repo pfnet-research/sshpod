@@ -50,28 +50,13 @@ scp ./local.tgz ubuntu@job--batch.namespace--etl.context--dev.sshpod:/tmp/
 - Pods running as non-root require you to SSH as that user; root Pods accept any SSH user.
 - Remote port forwarding honors the bind address requested by the client. For example, `ssh -R 0.0.0.0:18000:127.0.0.1:8000 ...sshpod` exposes port `18000` on the Pod network, while omitting the bind address keeps OpenSSH's loopback-only default.
 
-### Inherit selected container environment variables
+### Session environment
 
-SSH sessions use OpenSSH's environment by default. To add variables from the
-target container's `kubectl exec` environment, repeat `--inherit-env NAME` in
-the `ProxyCommand`. Put host-specific blocks before the general `Host *.sshpod`
-block in `~/.ssh/config`.
-
-```sshconfig
-Host pod--api.namespace--default.context--dev.sshpod
-  ProxyCommand ~/.local/bin/sshpod proxy --host %h --user %r --port %p --inherit-env APP_MODE --inherit-env PATH
-```
-
-Variables that are unset in the container are skipped, and empty values are
-preserved. A value that spans multiple lines cannot be passed through sshd and
-is skipped as well.
-
-If you relied on automatic forwarding for in-cluster `kubectl`, prefer a
-kubeconfig managed within the workspace. To keep using in-cluster discovery,
-explicitly inherit `KUBERNETES_SERVICE_HOST` and `KUBERNETES_SERVICE_PORT`.
-Add `PATH` or `KUBECONFIG` when needed. Environment values are captured when
-the corresponding daemon starts and reused by later connections with the same
-selection.
+SSH sessions start with the environment that `kubectl exec` provides in the
+target container, including variables from the image and the Pod spec. sshd
+still sets the variables that belong to the login, such as `HOME`, `USER`,
+`SHELL`, `TERM`, and `SSH_*`. A value that spans multiple lines cannot be
+passed through sshd and is left out.
 
 ## Requirements
 - Local: `kubectl` configured for the target cluster with permission to `exec` and `port-forward`; OpenSSH client tools (`ssh`/`scp`/`sftp`) and `ssh-keygen`; ability to write to `~/.ssh/config` and `~/.cache/sshpod`.

@@ -49,25 +49,12 @@ scp ./local.tgz ubuntu@job--batch.namespace--etl.context--dev.sshpod:/tmp/
 - Pod が非 root で動いている場合、SSH ユーザはコンテナ内の実ユーザと一致させてください。root Pod であれば任意のユーザで接続できます。
 - リモートポートフォワードでは、クライアントが指定した bind address を尊重します。例えば `ssh -R 0.0.0.0:18000:127.0.0.1:8000 ...sshpod` は Pod ネットワーク上で `18000` を公開し、bind address を省略した場合は OpenSSH のデフォルトどおり localhost のみに留まります。
 
-### コンテナの環境変数を指定して引き継ぐ
+### セッションの環境変数
 
-既定では、SSH セッションは OpenSSH が用意する環境を使います。
-接続先のコンテナで `kubectl exec` に渡される環境変数を追加したい場合は、
-`ProxyCommand` に `--inherit-env NAME` を必要な数だけ指定します。
-`~/.ssh/config` では、ホストごとの設定を共通の `Host *.sshpod` よりも先に書きます。
-
-```sshconfig
-Host pod--api.namespace--default.context--dev.sshpod
-  ProxyCommand ~/.local/bin/sshpod proxy --host %h --user %r --port %p --inherit-env APP_MODE --inherit-env PATH
-```
-
-コンテナで未設定の変数は省略し、空の値はそのまま渡します。
-値が複数行にわたる変数は sshd で渡せないため、同じく省略します。
-
-Pod 内の `kubectl` を自動引き継ぎに頼って使っていた場合は、Workspace 側で kubeconfig を管理する方法を推奨します。
-接続先を Pod 内で自動検出する構成を使い続ける場合は、`KUBERNETES_SERVICE_HOST` と
-`KUBERNETES_SERVICE_PORT` を明示し、必要に応じて `PATH` や `KUBECONFIG` も指定してください。
-値は対象のデーモンを起動するときに取得し、同じ指定で後から接続するときに再利用します。
+SSH セッションは、接続先のコンテナで `kubectl exec` に渡される環境変数を引き継ぎます。
+コンテナイメージや Pod の定義で設定された変数も含みます。
+`HOME`、`USER`、`SHELL`、`TERM`、`SSH_*` など、ログインに属する変数は sshd が設定します。
+値が複数行にわたる変数は sshd で渡せないため、引き継ぎません。
 
 ## 要件
 - ローカル: 対象クラスタに到達でき、`exec`/`port-forward` が許可された `kubectl`、OpenSSH クライアント (`ssh`/`scp`/`sftp`) と `ssh-keygen`、`~/.ssh/config` と `~/.cache/sshpod` への書き込み権限。

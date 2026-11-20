@@ -119,14 +119,8 @@ pub async fn run(args: ProxyArgs) -> Result<()> {
     remote::install_host_keys(&target, &base, &host_keys).await?;
 
     info!("[sshpod] starting/ensuring sshd in pod {}", pod_name);
-    let remote_port = remote::ensure_sshd_running(
-        &target,
-        &base,
-        &login_user,
-        &local_key.public,
-        &args.inherit_env,
-    )
-    .await?;
+    let remote_port =
+        remote::ensure_sshd_running(&target, &base, &login_user, &local_key.public).await?;
     info!(
         "[sshpod] sshd is listening on 127.0.0.1:{} (pod {})",
         remote_port, pod_name

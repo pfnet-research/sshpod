@@ -246,10 +246,10 @@ async fn run_remote_shell(
 
 async fn stop_existing_sshd(target: &RemoteTarget, base: &str) -> Result<()> {
     let command = format!(
-        "for pidfile in \"{base}\"/sshd.pid \"{base}\"/sshd-*/sshd.pid; do \
-           kill \"$(cat \"$pidfile\" 2>/dev/null)\" 2>/dev/null; \
-           rm -f \"$pidfile\"; \
-         done"
+        "set -eu; \
+         pid=\"$(cat \"{base}/sshd.pid\" 2>/dev/null || true)\"; \
+         if [ -n \"$pid\" ]; then kill \"$pid\" 2>/dev/null || true; fi; \
+         rm -f \"{base}/sshd.pid\" \"{base}/sshd.port\""
     );
     run_remote_shell(
         target,

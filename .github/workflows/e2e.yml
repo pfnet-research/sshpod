@@ -93,6 +93,7 @@ jobs:
             --env='SSHPOD_TEST_LABEL=two words "quoted" #tag \ tail ' \
             --env=SSHPOD_TEST_EMPTY= \
             --env="$(printf 'SSHPOD_TEST_MULTILINE=first\nsecond')" \
+            $(for i in $(seq 300); do printf -- '--env=SSHPOD_TEST_BULK_%s=value-%s ' "$i" "$i"; done) \
             --command -- sh -c "while true; do sleep 3600; done"
           kubectl wait --for=condition=Ready "pod/$POD_NAME" --timeout=180s
 
@@ -114,35 +115,25 @@ jobs:
             tee /tmp/ssh_shell_output
           grep 'shell-ok' /tmp/ssh_shell_output
 
-          ssh "$HOST" 'test -z "${SSHPOD_TEST_LABEL+x}${KUBERNETES_SERVICE_HOST+x}"'
-
-          export SSHPOD_TEST_LABEL='client value'
-          PROXY="$SSHPOD_BIN proxy --host %h --user %r --port %p"
-          INHERIT="$PROXY --inherit-env SSHPOD_TEST_LABEL --inherit-env SSHPOD_TEST_EMPTY --inherit-env SSHPOD_TEST_MISSING"
-
-          ssh -o "ProxyCommand=$INHERIT" "$HOST" \
-            'test "${SSHPOD_TEST_EMPTY+x}" = x && test -z "$SSHPOD_TEST_EMPTY" && test -z "${SSHPOD_TEST_MISSING+x}"'
-          test "$(ssh -o "ProxyCommand=$INHERIT" "$HOST" 'printf "%s" "$SSHPOD_TEST_LABEL"')" = \
-            'two words "quoted" #tag \ tail '
+          # Sessions get every variable of kubectl exec, with the same value, apart
+          # from the ones sshd sets for each login and values that span lines.
+          skip='^(HOME|USER|LOGNAME|SHELL|MAIL|TERM|DISPLAY|PWD|OLDPWD|SHLVL|_|SSH_[A-Z_]*|SSHPOD_TEST_MULTILINE)=|^second$'
+          kubectl exec "$POD_NAME" -- env | grep -Ev "$skip" | sort > /tmp/exec_env
+          ssh "$HOST" env | sort > /tmp/ssh_env
+          grep -Fx 'SSHPOD_TEST_LABEL=two words "quoted" #tag \ tail ' /tmp/exec_env
+          grep -Fx 'SSHPOD_TEST_EMPTY=' /tmp/exec_env
+          grep -Fx 'SSHPOD_TEST_BULK_300=value-300' /tmp/exec_env
+          test -z "$(comm -23 /tmp/exec_env /tmp/ssh_env | tee /dev/stderr)"
+          test -z "$(grep SSHPOD_TEST_MULTILINE /tmp/ssh_env)"
 
           printf 'printf "\\nenvironment=%%s\\n" "$SSHPOD_TEST_LABEL"\nexit\n' |
-            timeout 30s ssh -tt -o "ProxyCommand=$INHERIT" "$HOST" |
+            timeout 30s ssh -tt "$HOST" |
             tr -d '\r' |
             grep -Fx 'environment=two words "quoted" #tag \ tail '
 
-          ssh -o "ProxyCommand=$PROXY --inherit-env SSHPOD_TEST_EMPTY" "$HOST" \
-            'test "${SSHPOD_TEST_EMPTY+x}" = x && test -z "${SSHPOD_TEST_LABEL+x}"'
-          ssh "$HOST" 'test -z "${SSHPOD_TEST_LABEL+x}${SSHPOD_TEST_EMPTY+x}"'
+          printf 'pwd\n' | sftp -b - "$HOST" | grep -F 'Remote working directory'
 
-          # A value that sshd cannot carry is left out without failing the login.
-          ssh -o "ProxyCommand=$INHERIT --inherit-env SSHPOD_TEST_MULTILINE" "$HOST" \
-            'test -z "${SSHPOD_TEST_MULTILINE+x}" && test -n "$SSHPOD_TEST_LABEL"'
-
-          printf 'pwd\n' | sftp -b - -o "ProxyCommand=$INHERIT" "$HOST" | grep -F 'Remote working directory'
-
-          # Later connections reuse the daemons that are already running.
-          pids() { kubectl exec "$POD_NAME" -- sh -c 'cat /tmp/sshpod/*/*/sshd-*/sshd.pid' | sort; }
-          before="$(pids)"
+          # Later connections reuse the daemon that is already running.
+          before="$(kubectl exec "$POD_NAME" -- sh -c 'cat /tmp/sshpod/*/*/sshd.pid')"
           ssh "$HOST" true
-          ssh -o "ProxyCommand=$INHERIT" "$HOST" true
-          test "$(pids)" = "$before"
+          test "$(kubectl exec "$POD_NAME" -- sh -c 'cat /tmp/sshpod/*/*/sshd.pid')" = "$before"
