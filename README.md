@@ -62,11 +62,9 @@ Host pod--api.namespace--default.context--dev.sshpod
   ProxyCommand ~/.local/bin/sshpod proxy --host %h --user %r --port %p --inherit-env APP_MODE --inherit-env PATH
 ```
 
-Use this option when the SSH login user is the same as the container's exec
-user. Unset variables are skipped and empty values are preserved. Values must
-fit on one line. OpenSSH keeps control of login identity, terminal, connection,
-and locale variables. sshpod also rejects shell startup and loader variables
-such as `BASH_ENV` and `LD_PRELOAD`.
+Variables that are unset in the container are skipped, and empty values are
+preserved. A value that spans multiple lines cannot be passed through sshd and
+is skipped as well.
 
 If you relied on automatic forwarding for in-cluster `kubectl`, prefer a
 kubeconfig managed within the workspace. To keep using in-cluster discovery,
@@ -81,7 +79,7 @@ selection.
 
 ## How it works
 - `sshpod configure` writes a `Host *.sshpod` block into `~/.ssh/config` with a timestamped backup, pointing ProxyCommand at the `sshpod` binary.
-- On first connect, sshpod creates `~/.cache/sshpod/id_ed25519`, uploads an architecture-matched `sshd` bundle under `/tmp/sshpod`, installs host keys, and starts the daemon on `127.0.0.1`.
+- On first connect, sshpod creates `~/.cache/sshpod/id_ed25519`, uploads an architecture-matched `sshd` bundle to `/tmp/sshpod/<pod-uid>/<container>`, installs host keys, and starts the daemon on `127.0.0.1`.
 - A `kubectl port-forward` connects your local SSH client to that in-pod `sshd`; subsequent connections reuse the bundle and host keys while they remain in `/tmp/sshpod`.
 
 ## Development

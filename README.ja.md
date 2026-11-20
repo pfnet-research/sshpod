@@ -61,10 +61,8 @@ Host pod--api.namespace--default.context--dev.sshpod
   ProxyCommand ~/.local/bin/sshpod proxy --host %h --user %r --port %p --inherit-env APP_MODE --inherit-env PATH
 ```
 
-SSH のログインユーザと `kubectl exec` の実行ユーザが同じ場合に使えます。
-未設定の変数は省略し、空の値はそのまま渡します。値に改行は含められません。
-ログインユーザ、端末、接続、ロケールの変数は、SSH やシェルの設定に従います。
-`BASH_ENV` や `LD_PRELOAD` など、シェルやプログラムの起動時に使われる変数も指定できません。
+コンテナで未設定の変数は省略し、空の値はそのまま渡します。
+値が複数行にわたる変数は sshd で渡せないため、同じく省略します。
 
 Pod 内の `kubectl` を自動引き継ぎに頼って使っていた場合は、Workspace 側で kubeconfig を管理する方法を推奨します。
 接続先を Pod 内で自動検出する構成を使い続ける場合は、`KUBERNETES_SERVICE_HOST` と
@@ -77,7 +75,7 @@ Pod 内の `kubectl` を自動引き継ぎに頼って使っていた場合は�
 
 ## 動作概要
 - `sshpod configure` は `~/.ssh/config` に `Host *.sshpod` ブロックを書き込み（タイムスタンプ付きでバックアップ作成）、ProxyCommand を `sshpod` バイナリに向けます。
-- 初回接続時に `~/.cache/sshpod/id_ed25519` を作成し、Pod 内の `/tmp/sshpod` 以下にアーキテクチャ適合の `sshd` バンドルを配置します。ホスト鍵をインストールし、`127.0.0.1` で起動します。
+- 初回接続時に `~/.cache/sshpod/id_ed25519` を作成し、Pod 内 `/tmp/sshpod/<pod-uid>/<container>` にアーキテクチャ適合の `sshd` バンドルを配置、ホスト鍵をインストールして `127.0.0.1` で起動します。
 - `kubectl port-forward` でその `sshd` に接続し、`/tmp/sshpod` に残っている間は同じバンドルとホスト鍵を再利用します。
 
 ## 開発メモ

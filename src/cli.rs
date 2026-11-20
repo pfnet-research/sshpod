@@ -33,7 +33,7 @@ pub struct ProxyArgs {
     #[arg(long)]
     pub port: Option<u16>,
     /// Copy one variable from the target container into SSH sessions (repeatable)
-    #[arg(long, value_name = "NAME", value_parser = remote::parse_inherited_env)]
+    #[arg(long, value_name = "NAME", value_parser = remote::parse_env_name)]
     pub inherit_env: Vec<String>,
     /// Log level: error, info, debug
     #[arg(long, default_value = "info")]

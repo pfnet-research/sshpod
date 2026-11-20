@@ -134,17 +134,15 @@ jobs:
             'test "${SSHPOD_TEST_EMPTY+x}" = x && test -z "${SSHPOD_TEST_LABEL+x}"'
           ssh "$HOST" 'test -z "${SSHPOD_TEST_LABEL+x}${SSHPOD_TEST_EMPTY+x}"'
 
-          if ssh -o "ProxyCommand=$PROXY --inherit-env HOME" "$HOST" true >/tmp/ssh_env_error 2>&1; then
-            echo 'HOME was accepted as an inherited variable' >&2
-            exit 1
-          fi
-          grep -F 'HOME is reserved' /tmp/ssh_env_error
-
-
-          if ssh -o "ProxyCommand=$PROXY --inherit-env SSHPOD_TEST_MULTILINE" "$HOST" true >/tmp/ssh_env_error 2>&1; then
-            echo 'A multiline environment value was accepted' >&2
-            exit 1
-          fi
-          grep -F 'multiline values are not supported' /tmp/ssh_env_error
+          # A value that sshd cannot carry is left out without failing the login.
+          ssh -o "ProxyCommand=$INHERIT --inherit-env SSHPOD_TEST_MULTILINE" "$HOST" \
+            'test -z "${SSHPOD_TEST_MULTILINE+x}" && test -n "$SSHPOD_TEST_LABEL"'
 
           printf 'pwd\n' | sftp -b - -o "ProxyCommand=$INHERIT" "$HOST" | grep -F 'Remote working directory'
+
+          # Later connections reuse the daemons that are already running.
+          pids() { kubectl exec "$POD_NAME" -- sh -c 'cat /tmp/sshpod/*/*/sshd-*/sshd.pid' | sort; }
+          before="$(pids)"
+          ssh "$HOST" true
+          ssh -o "ProxyCommand=$INHERIT" "$HOST" true
+          test "$(pids)" = "$before"
