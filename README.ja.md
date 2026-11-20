@@ -68,3 +68,5 @@ SSH セッションは、接続先のコンテナで `kubectl exec` に渡され
 ## 開発メモ
 - `make install` でリリースビルド、`sshpod configure` の実行、`~/.local` へのインストールをまとめて行います。
 - テストは `make test`、lint は `make lint` で実行できます。
+- リリースは [release-please](https://github.com/googleapis/release-please) が準備します。`main` の Conventional Commits（`fix:` はパッチ、`feat:` はマイナー）から、`Cargo.toml` と `Cargo.lock` の `version` を上げ、`CHANGELOG.md` を更新するリリース用のプルリクエストを開いたままにします。そのプルリクエストをマージするとタグが付き、`Release` ワークフローが5つの配布ファイルをビルドして、それぞれの `--version` が版とビルドしたコミット（例: `sshpod 1.1.0 (b6c9a10)`）を返すことを確かめたうえで、`SHA256SUMS` とともに公開します。プルリクエストの題名は、数えられるように Conventional Commits の形にしてください。
+- コンテナ内の `sshd` バンドルは、同梱バイナリーが変わったときだけ入れ替わります。sshpod の版が上がっただけでは再転送しません。

@@ -1,0 +1,2 @@
+[build.env]
+passthrough = ["SSHPOD_BUILD_COMMIT"]

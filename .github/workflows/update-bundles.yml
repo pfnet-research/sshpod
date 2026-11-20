@@ -193,7 +193,8 @@ jobs:
           set -euo pipefail
 
           branch="update/openssh-${OPENSSH_VERSION}-bundles"
-          title="Update OpenSSH bundles to ${OPENSSH_VERSION}"
+          # A Conventional Commits title, so release-please lists the update.
+          title="fix: update OpenSSH bundles to ${OPENSSH_VERSION}"
           body_file="$RUNNER_TEMP/update-openssh-bundles-pr.md"
 
           cat > "$body_file" <<EOF

@@ -81,13 +81,52 @@ fetch_latest_version() {
   exit 1
 }
 
+# Releases up to 1.0.8 were published without SHA256SUMS; those are installed unverified.
+verify_checksum() {
+  sums="$TMPDIR/SHA256SUMS"
+  status="$(curl -sL -o "$sums" -w '%{http_code}' "$BASE_URL/SHA256SUMS" || true)"
+  case "$status" in
+    200) ;;
+    404)
+      echo "Note: this release has no SHA256SUMS; skipping checksum verification." >&2
+      return 0
+      ;;
+    *)
+      echo "Failed to download SHA256SUMS (HTTP $status)." >&2
+      exit 1
+      ;;
+  esac
+
+  expected="$(awk -v asset="$ASSET" '$2 == asset || $2 == "*" asset { print $1 }' "$sums")"
+  if [ -z "$expected" ]; then
+    echo "SHA256SUMS does not list ${ASSET}." >&2
+    exit 1
+  fi
+
+  if command -v sha256sum >/dev/null 2>&1; then
+    actual="$(sha256sum "$TMPDIR/$ASSET" | awk '{ print $1 }')"
+  elif command -v shasum >/dev/null 2>&1; then
+    actual="$(shasum -a 256 "$TMPDIR/$ASSET" | awk '{ print $1 }')"
+  else
+    echo "Note: sha256sum and shasum are unavailable; skipping checksum verification." >&2
+    return 0
+  fi
+
+  if [ "$actual" != "$expected" ]; then
+    echo "Checksum mismatch for ${ASSET}: expected $expected, got $actual." >&2
+    exit 1
+  fi
+  echo "Verified checksum of ${ASSET}."
+}
+
 if [ -z "$VERSION" ]; then
   VERSION="$(fetch_latest_version)"
 fi
 
 ARCH_NAME="$(detect_arch)"
 ASSET="sshpod_${VERSION}_${ARCH_NAME}.tar.gz"
-URL="https://github.com/pfnet-research/sshpod/releases/download/v${VERSION}/${ASSET}"
+BASE_URL="https://github.com/pfnet-research/sshpod/releases/download/v${VERSION}"
+URL="$BASE_URL/$ASSET"
 
 TMPDIR="$(mktemp -d)"
 cleanup() { rm -rf "$TMPDIR"; }
@@ -95,6 +134,7 @@ trap cleanup EXIT
 
 echo "Downloading ${ASSET}..."
 curl -fL "$URL" -o "$TMPDIR/$ASSET"
+verify_checksum
 
 mkdir -p "$TMPDIR/bin"
 tar xzf "$TMPDIR/$ASSET" -C "$TMPDIR/bin"

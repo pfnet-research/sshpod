@@ -5,7 +5,7 @@ use clap::{Args, Parser, Subcommand};
 #[derive(Parser)]
 #[command(
     name = "sshpod",
-    version,
+    version = env!("SSHPOD_VERSION"),
     about = "ProxyCommand helper for ssh/scp/sftp to Kubernetes Pods"
 )]
 pub struct Cli {
