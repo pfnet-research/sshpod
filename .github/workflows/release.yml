@@ -1,34 +1,55 @@
 name: Release
 
+# Cargo.toml is the single source of the version. Every run builds and checks the
+# five release archives; a manual run on main also tags that commit and publishes them.
 on:
   workflow_dispatch:
-    inputs:
-      version:
-        description: "Release version (e.g. 0.2.0)"
-        required: true
   push:
     branches:
       - main
   pull_request:
 
-jobs:
-  create_release:
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Compute tag
-        id: tag
-        run: echo "tag=v${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+permissions:
+  contents: read
 
-      - name: Create Release
-        uses: softprops/action-gh-release@v3
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read version from Cargo.toml
+        id: version
+        run: |
+          set -euo pipefail
+          version="$(cargo metadata --no-deps --format-version 1 \
+            | jq -er '.packages[] | select(.name == "sshpod") | .version')"
+          if ! printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Unsupported version in Cargo.toml: $version"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+
+      - name: Check that this version can be released
+        if: github.event_name == 'workflow_dispatch'
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ steps.tag.outputs.tag }}
-          name: sshpod ${{ inputs.version }}
-          draft: true
-          prerelease: false
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::Releases are published from main, not $GITHUB_REF."
+            exit 1
+          fi
+          existing="$(git ls-remote --tags origin "refs/tags/$TAG")"
+          if [ -n "$existing" ]; then
+            echo "::error::Tag $TAG already exists. Bump the version in Cargo.toml and Cargo.lock before releasing."
+            exit 1
+          fi
 
   build:
     strategy:
@@ -55,8 +76,9 @@ jobs:
             target: aarch64-pc-windows-msvc
             arch_name: windows_arm64
             ext: zip
+    needs: plan
     env:
-      VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.sha }}
+      VERSION: ${{ needs.plan.outputs.version }}
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -139,42 +161,120 @@ jobs:
           name: ${{ steps.package_unix.outputs.asset_path || steps.package_windows.outputs.asset_path }}
           path: ${{ steps.package_unix.outputs.asset_path || steps.package_windows.outputs.asset_path }}
 
-  upload_release_assets:
-    if: github.event_name == 'workflow_dispatch'
+  verify:
     needs:
-      - create_release
+      - plan
       - build
     strategy:
       fail-fast: false
       matrix:
         include:
-          - arch_name: linux_amd64
+          - os: ubuntu-latest
+            arch_name: linux_amd64
             ext: tar.gz
-          - arch_name: linux_arm64
+          - os: ubuntu-24.04-arm
+            arch_name: linux_arm64
             ext: tar.gz
-          - arch_name: darwin_arm64
+          - os: macos-latest
+            arch_name: darwin_arm64
             ext: tar.gz
-          - arch_name: windows_amd64
+          - os: windows-latest
+            arch_name: windows_amd64
             ext: zip
-          - arch_name: windows_arm64
+          - os: windows-11-arm
+            arch_name: windows_arm64
             ext: zip
-    runs-on: ubuntu-latest
     env:
-      VERSION: ${{ inputs.version }}
+      VERSION: ${{ needs.plan.outputs.version }}
+      ASSET: sshpod_${{ needs.plan.outputs.version }}_${{ matrix.arch_name }}.${{ matrix.ext }}
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Download artifact
         uses: actions/download-artifact@v4
         with:
-          name: sshpod_${{ env.VERSION }}_${{ matrix.arch_name }}.${{ matrix.ext }}
-          path: artifacts
+          name: ${{ env.ASSET }}
 
-      - name: Upload release asset
-        uses: softprops/action-gh-release@v3
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify packaged version (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir extracted
+          tar xzf "$ASSET" -C extracted
+          actual="$(./extracted/sshpod --version)"
+          test "$actual" = "sshpod $VERSION"
+
+      - name: Verify packaged version (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Expand-Archive -Path $env:ASSET -DestinationPath extracted
+          $actual = (& ./extracted/sshpod.exe --version | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0) { throw "sshpod.exe --version failed" }
+          if ($actual -ne "sshpod $($env:VERSION)") {
+            throw "Expected 'sshpod $($env:VERSION)' but got '$actual'"
+          }
+
+  publish:
+    if: github.event_name == 'workflow_dispatch'
+    needs:
+      - plan
+      - build
+      - verify
+    runs-on: ubuntu-latest
+    concurrency: release-publish
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+      TAG: ${{ needs.plan.outputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
         with:
-          tag_name: v${{ env.VERSION }}
-          files: artifacts/sshpod_${{ env.VERSION }}_${{ matrix.arch_name }}.${{ matrix.ext }}
-          fail_on_unmatched_files: true
-          draft: true
-          prerelease: false
+          pattern: sshpod_*
+          path: dist
+          merge-multiple: true
+
+      - name: Check assets and write checksums
+        working-directory: dist
+        run: |
+          set -euxo pipefail
+          assets=(
+            "sshpod_${VERSION}_darwin_arm64.tar.gz"
+            "sshpod_${VERSION}_linux_amd64.tar.gz"
+            "sshpod_${VERSION}_linux_arm64.tar.gz"
+            "sshpod_${VERSION}_windows_amd64.zip"
+            "sshpod_${VERSION}_windows_arm64.zip"
+          )
+          for asset in "${assets[@]}"; do
+            test -s "$asset"
+          done
+          test "$(find . -type f | wc -l)" -eq "${#assets[@]}"
+          sha256sum "${assets[@]}" > SHA256SUMS
+          cat SHA256SUMS
+
+      # The tag is created here, on the commit that was built, only after every
+      # archive has been built and checked.
+      - name: Publish release
+        run: |
+          set -euo pipefail
+          existing="$(git ls-remote --tags "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" "refs/tags/$TAG")"
+          if [ -n "$existing" ]; then
+            echo "::error::Tag $TAG already exists."
+            exit 1
+          fi
+          gh release create "$TAG" \
+            --target "$GITHUB_SHA" \
+            --title "sshpod $VERSION" \
+            --generate-notes \
+            --latest \
+            dist/*
+          tagged="$(gh api "repos/$GH_REPO/commits/$TAG" --jq .sha)"
+          if [ "$tagged" != "$GITHUB_SHA" ]; then
+            echo "::error::Tag $TAG points at $tagged, but $GITHUB_SHA was built."
+            exit 1
+          fi

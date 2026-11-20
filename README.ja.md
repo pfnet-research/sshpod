@@ -68,3 +68,5 @@ SSH セッションは、接続先のコンテナで `kubectl exec` に渡され
 ## 開発メモ
 - `make install` でリリースビルド、`sshpod configure` の実行、`~/.local` へのインストールをまとめて行います。
 - テストは `make test`、lint は `make lint` で実行できます。
+- リリースするときは、`main` で `Cargo.toml`（と `Cargo.lock`）の `version` を上げてから、`Release` ワークフローを `main` で手動実行します。ワークフローは `Cargo.toml` から版を読み、5つの配布ファイルすべてで `--version` がその版を返すことを確かめたうえで、ビルドしたコミットにタグを付けて `v<version>` を `SHA256SUMS` とともに公開します。同じタグがすでにあるときは止まります。
+- コンテナ内の `sshd` バンドルは、同梱バイナリーが変わったときだけ入れ替わります。sshpod の版が上がっただけでは再転送しません。

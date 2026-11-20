@@ -83,6 +83,42 @@ function Get-Version([string]$Value) {
     return $version
 }
 
+# Releases up to 1.0.8 were published without SHA256SUMS; those are installed unverified.
+function Confirm-Checksum([string]$BaseUrl, [string]$AssetName, [string]$AssetPath) {
+    $sumsPath = "$AssetPath.SHA256SUMS"
+    try {
+        Invoke-WebRequest -UseBasicParsing -Headers @{ "User-Agent" = "sshpod-install" } -Uri "$BaseUrl/SHA256SUMS" -OutFile $sumsPath
+    }
+    catch {
+        $status = 0
+        if ($_.Exception.Response) {
+            $status = [int]$_.Exception.Response.StatusCode
+        }
+        if ($status -eq 404) {
+            Write-Warning "This release has no SHA256SUMS; skipping checksum verification."
+            return
+        }
+        throw "Failed to download SHA256SUMS from '$BaseUrl'. Error: $($_.Exception.Message)"
+    }
+
+    $expected = ""
+    foreach ($line in Get-Content $sumsPath) {
+        $fields = $line.Trim() -split "\s+", 2
+        if ($fields.Count -eq 2 -and $fields[1].TrimStart("*") -eq $AssetName) {
+            $expected = $fields[0]
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($expected)) {
+        throw "SHA256SUMS does not list $AssetName."
+    }
+
+    $actual = (Get-FileHash -Algorithm SHA256 -Path $AssetPath).Hash
+    if ($actual -ne $expected) {
+        throw "Checksum mismatch for ${AssetName}: expected $expected, got $actual."
+    }
+    Write-Host "Verified checksum of $AssetName."
+}
+
 function Prompt-Configure([string]$ExePath) {
     if ($Yes) {
         & $ExePath configure
@@ -102,7 +138,8 @@ function Main {
     $version = Get-Version $Version
     $arch = Detect-Arch
     $assetName = "sshpod_${version}_windows_${arch}.zip"
-    $url = "https://github.com/pfnet-research/sshpod/releases/download/v${version}/${assetName}"
+    $baseUrl = "https://github.com/pfnet-research/sshpod/releases/download/v${version}"
+    $url = "$baseUrl/$assetName"
 
     $tmp = Join-Path ([IO.Path]::GetTempPath()) ("sshpod-" + [guid]::NewGuid().ToString("N"))
     New-Item -ItemType Directory -Path $tmp -Force | Out-Null
@@ -118,6 +155,7 @@ function Main {
         catch {
             throw "Failed to download release asset from '$url'. Error: $($_.Exception.Message)"
         }
+        Confirm-Checksum $baseUrl $assetName $assetPath
 
         Expand-Archive -Path $assetPath -DestinationPath $binDir -Force
         $exe = Get-ChildItem -Path $binDir -Filter "sshpod.exe" -Recurse | Select-Object -First 1

@@ -11,7 +11,9 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 use xz2::read::XzDecoder;
 
-pub const BUNDLE_VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "+sshd3");
+// Bump when the files or metadata that make up an installed bundle change.
+// The bundle contents themselves are tracked by their digest.
+const BUNDLE_LAYOUT: u32 = 4;
 #[cfg(test)]
 const BUNDLE_FILE_NAMES: [&str; 3] = ["sshd", "sshd-session", "sshd-auth"];
 const TAR_BLOCK_SIZE: usize = 512;
@@ -30,6 +32,11 @@ impl BundleFiles {
             ("sshd-auth", self.sshd_auth.as_slice()),
         ]
     }
+}
+
+fn bundle_id(arch: &str) -> String {
+    let digest = embedded::get_bundle_sha256(arch).unwrap_or("local");
+    format!("sshd{BUNDLE_LAYOUT}-{digest}")
 }
 
 pub async fn detect_remote_arch(target: &RemoteTarget) -> Result<String> {
@@ -53,11 +60,17 @@ pub async fn ensure_bundle(target: &RemoteTarget, base: &str, arch: &str) -> Res
         kubectl::exec_capture_optional_target(target, &["cat", &version_path]).await?;
     let remote_arch = kubectl::exec_capture_optional_target(target, &["cat", &arch_path]).await?;
 
+    let bundle_id = bundle_id(arch);
+
     info!(
         "[sshpod] checking bundle (remote version={:?}, remote arch={:?}, expected version={}, expected arch={})",
-        remote_version, remote_arch, BUNDLE_VERSION, arch
+        remote_version, remote_arch, bundle_id, arch
     );
-    if remote_version.as_deref() == Some(BUNDLE_VERSION) && remote_arch.as_deref() == Some(arch) {
+    // A bundle read from a local file has no known digest, so it is always reinstalled.
+    if embedded::get_bundle_sha256(arch).is_some()
+        && remote_version.as_deref() == Some(bundle_id.as_str())
+        && remote_arch.as_deref() == Some(arch)
+    {
         info!("[sshpod] bundle already up to date");
         return Ok(());
     }
@@ -200,8 +213,9 @@ fn prepare_bundle_command(base: &str, tmp: &str) -> String {
 }
 
 fn finalize_bundle_command(base: &str, tmp: &str, arch: &str) -> String {
+    let bundle_id = bundle_id(arch);
     let meta = format!(
-        "printf '%s\\n' \"{BUNDLE_VERSION}\" > \"{base}/bundle/VERSION\"; \
+        "printf '%s\\n' \"{bundle_id}\" > \"{base}/bundle/VERSION\"; \
          printf '%s\\n' \"{arch}\" > \"{base}/bundle/ARCH\"; \
          chmod 600 \"{base}/bundle/VERSION\" \"{base}/bundle/ARCH\""
     );
@@ -416,7 +430,7 @@ fn tar_header_size(header: &[u8]) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::{
-        decompress_xz, extract_bundle_archive_command, extract_bundle_files,
+        bundle_id, decompress_xz, extract_bundle_archive_command, extract_bundle_files,
         finalize_bundle_command, load_bundle_data, prepare_bundle_command,
         upload_bundle_file_command, ArchiveCompression, BUNDLE_FILE_NAMES,
     };
@@ -463,6 +477,24 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn bundle_id_follows_bundle_contents_not_package_version() {
+        use sha2::{Digest, Sha256};
+
+        for arch in ["linux/amd64", "linux/arm64"] {
+            let data = crate::embedded::get_bundle(arch).expect("embedded bundle");
+            let digest: String = Sha256::digest(data)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect();
+            let id = bundle_id(arch);
+            assert_eq!(id, format!("sshd{}-{digest}", super::BUNDLE_LAYOUT));
+            assert!(!id.contains(env!("CARGO_PKG_VERSION")));
+            assert!(finalize_bundle_command("/base", "/base/bundle.new", arch).contains(&id));
+        }
+        assert_ne!(bundle_id("linux/amd64"), bundle_id("linux/arm64"));
     }
 
     #[test]
