@@ -70,5 +70,5 @@ passed through sshd and is left out.
 ## Development
 - `make install` builds the release binary, runs `sshpod configure`, and installs under `~/.local`.
 - `make test` and `make lint` run the test and lint suites.
-- To release, bump `version` in `Cargo.toml` (and `Cargo.lock`) on `main`, then run the `Release` workflow manually on `main`. The workflow reads the version from `Cargo.toml`, checks that all five archives report it with `--version`, and publishes `v<version>` with `SHA256SUMS`, tagging the commit it built. It stops if that tag already exists.
+- To release, bump `version` in `Cargo.toml` (and `Cargo.lock`) on `main`, then run the `Release` workflow manually on `main`. The workflow reads the version from `Cargo.toml`, checks that all five archives report it and the built commit with `--version` (for example `sshpod 1.0.9 (b6c9a10)`), and publishes `v<version>` with `SHA256SUMS`, tagging the commit it built. It stops if that tag already exists.
 - The `sshd` bundle in a container is replaced only when the bundled binaries change; a new sshpod version alone does not reinstall it.

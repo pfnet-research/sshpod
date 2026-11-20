@@ -79,6 +79,8 @@ jobs:
     needs: plan
     env:
       VERSION: ${{ needs.plan.outputs.version }}
+      # Read by build.rs; cross forwards it into its container (Cross.toml).
+      SSHPOD_BUILD_COMMIT: ${{ github.sha }}
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -202,7 +204,7 @@ jobs:
           mkdir extracted
           tar xzf "$ASSET" -C extracted
           actual="$(./extracted/sshpod --version)"
-          test "$actual" = "sshpod $VERSION"
+          test "$actual" = "sshpod $VERSION (${GITHUB_SHA:0:7})"
 
       - name: Verify packaged version (windows)
         if: runner.os == 'Windows'
@@ -212,8 +214,9 @@ jobs:
           Expand-Archive -Path $env:ASSET -DestinationPath extracted
           $actual = (& ./extracted/sshpod.exe --version | Out-String).Trim()
           if ($LASTEXITCODE -ne 0) { throw "sshpod.exe --version failed" }
-          if ($actual -ne "sshpod $($env:VERSION)") {
-            throw "Expected 'sshpod $($env:VERSION)' but got '$actual'"
+          $expected = "sshpod $($env:VERSION) ($($env:GITHUB_SHA.Substring(0, 7)))"
+          if ($actual -ne $expected) {
+            throw "Expected '$expected' but got '$actual'"
           }
 
   publish:
