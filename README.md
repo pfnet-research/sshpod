@@ -70,5 +70,5 @@ passed through sshd and is left out.
 ## Development
 - `make install` builds the release binary, runs `sshpod configure`, and installs under `~/.local`.
 - `make test` and `make lint` run the test and lint suites.
-- To release, bump `version` in `Cargo.toml` (and `Cargo.lock`) on `main`, then run the `Release` workflow manually on `main`. The workflow reads the version from `Cargo.toml`, checks that all five archives report it and the built commit with `--version` (for example `sshpod 1.0.9 (b6c9a10)`), and publishes `v<version>` with `SHA256SUMS`, tagging the commit it built. It stops if that tag already exists.
+- Releases are prepared by [release-please](https://github.com/googleapis/release-please). It keeps a release pull request open that bumps `version` in `Cargo.toml` and `Cargo.lock` and updates `CHANGELOG.md` from the Conventional Commits on `main` (`fix:` is a patch, `feat:` a minor release). Merging that pull request tags the release; the `Release` workflow then builds the five archives, checks that each reports the version and the built commit with `--version` (for example `sshpod 1.1.0 (b6c9a10)`), and publishes them with `SHA256SUMS`. Give pull requests a Conventional Commits title so they are counted.
 - The `sshd` bundle in a container is replaced only when the bundled binaries change; a new sshpod version alone does not reinstall it.

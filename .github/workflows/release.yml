@@ -1,13 +1,17 @@
 name: Release
 
-# Cargo.toml is the single source of the version. Every run builds and checks the
-# five release archives; a manual run on main also tags that commit and publishes them.
+# Every run builds the five release archives and checks them. A run for a
+# version tag (pushed by release-please when its release pull request is merged)
+# also uploads them to the draft release for that tag and publishes it.
 on:
-  workflow_dispatch:
   push:
     branches:
       - main
+    tags:
+      - "v*.*.*"
   pull_request:
+  # To retry a release, run this manually and select the tag.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -17,10 +21,12 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
-      tag: ${{ steps.version.outputs.tag }}
+      sha: ${{ steps.version.outputs.sha }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: ${{ github.ref_type == 'tag' && 0 || 1 }}
 
       - name: Read version from Cargo.toml
         id: version
@@ -33,21 +39,20 @@ jobs:
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Check that this version can be released
-        if: github.event_name == 'workflow_dispatch'
+      - name: Check that the tag matches the source
+        if: github.ref_type == 'tag'
         env:
-          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
-            echo "::error::Releases are published from main, not $GITHUB_REF."
+          if [ "$GITHUB_REF_NAME" != "v$VERSION" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match version $VERSION in Cargo.toml."
             exit 1
           fi
-          existing="$(git ls-remote --tags origin "refs/tags/$TAG")"
-          if [ -n "$existing" ]; then
-            echo "::error::Tag $TAG already exists. Bump the version in Cargo.toml and Cargo.lock before releasing."
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "::error::Tag $GITHUB_REF_NAME is not on main."
             exit 1
           fi
 
@@ -80,7 +85,7 @@ jobs:
     env:
       VERSION: ${{ needs.plan.outputs.version }}
       # Read by build.rs; cross forwards it into its container (Cross.toml).
-      SSHPOD_BUILD_COMMIT: ${{ github.sha }}
+      SSHPOD_BUILD_COMMIT: ${{ needs.plan.outputs.sha }}
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -188,6 +193,7 @@ jobs:
             ext: zip
     env:
       VERSION: ${{ needs.plan.outputs.version }}
+      BUILD_SHA: ${{ needs.plan.outputs.sha }}
       ASSET: sshpod_${{ needs.plan.outputs.version }}_${{ matrix.arch_name }}.${{ matrix.ext }}
     runs-on: ${{ matrix.os }}
     steps:
@@ -204,7 +210,7 @@ jobs:
           mkdir extracted
           tar xzf "$ASSET" -C extracted
           actual="$(./extracted/sshpod --version)"
-          test "$actual" = "sshpod $VERSION (${GITHUB_SHA:0:7})"
+          test "$actual" = "sshpod $VERSION (${BUILD_SHA:0:7})"
 
       - name: Verify packaged version (windows)
         if: runner.os == 'Windows'
@@ -214,24 +220,29 @@ jobs:
           Expand-Archive -Path $env:ASSET -DestinationPath extracted
           $actual = (& ./extracted/sshpod.exe --version | Out-String).Trim()
           if ($LASTEXITCODE -ne 0) { throw "sshpod.exe --version failed" }
-          $expected = "sshpod $($env:VERSION) ($($env:GITHUB_SHA.Substring(0, 7)))"
+          $expected = "sshpod $($env:VERSION) ($($env:BUILD_SHA.Substring(0, 7)))"
           if ($actual -ne $expected) {
             throw "Expected '$expected' but got '$actual'"
           }
 
   publish:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.ref_type == 'tag'
     needs:
       - plan
       - build
       - verify
     runs-on: ubuntu-latest
-    concurrency: release-publish
+    # Reviewers configured on this environment approve the release here.
+    environment: release
+    concurrency:
+      group: release-publish-${{ github.ref_name }}
+      cancel-in-progress: false
     permissions:
       contents: write
     env:
       VERSION: ${{ needs.plan.outputs.version }}
-      TAG: ${{ needs.plan.outputs.tag }}
+      BUILD_SHA: ${{ needs.plan.outputs.sha }}
+      TAG: ${{ github.ref_name }}
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
@@ -260,24 +271,25 @@ jobs:
           sha256sum "${assets[@]}" > SHA256SUMS
           cat SHA256SUMS
 
-      # The tag is created here, on the commit that was built, only after every
-      # archive has been built and checked.
-      - name: Publish release
+      # release-please leaves a draft release for the tag. A published release
+      # is never modified; a tag without a release (pushed by hand) gets a draft.
+      - name: Upload to the draft release and publish it
         run: |
           set -euo pipefail
-          existing="$(git ls-remote --tags "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" "refs/tags/$TAG")"
-          if [ -n "$existing" ]; then
-            echo "::error::Tag $TAG already exists."
-            exit 1
-          fi
-          gh release create "$TAG" \
-            --target "$GITHUB_SHA" \
-            --title "sshpod $VERSION" \
-            --generate-notes \
-            --latest \
-            dist/*
+          drafts="$(gh api "repos/$GH_REPO/releases" --paginate \
+            --jq ".[] | select(.tag_name == \"$TAG\") | .draft")"
+          case "$drafts" in
+            true) ;;
+            "") gh release create "$TAG" --verify-tag --draft --title "$TAG" --generate-notes ;;
+            *)
+              echo "::error::Release $TAG is already published, or has more than one draft."
+              exit 1
+              ;;
+          esac
           tagged="$(gh api "repos/$GH_REPO/commits/$TAG" --jq .sha)"
-          if [ "$tagged" != "$GITHUB_SHA" ]; then
-            echo "::error::Tag $TAG points at $tagged, but $GITHUB_SHA was built."
+          if [ "$tagged" != "$BUILD_SHA" ]; then
+            echo "::error::Tag $TAG points at $tagged, but $BUILD_SHA was built."
             exit 1
           fi
+          gh release upload "$TAG" dist/* --clobber
+          gh release edit "$TAG" --draft=false --latest
