@@ -63,7 +63,7 @@ Host pod--api.namespace--default.context--dev.sshpod
 
 SSH のログインユーザと `kubectl exec` の実行ユーザが同じ場合に使えます。
 未設定の変数は省略し、空の値はそのまま渡します。値に改行は含められません。
-ログインユーザ、端末、接続、ロケールの変数は OpenSSH が設定します。
+ログインユーザ、端末、接続、ロケールの変数は、SSH やシェルの設定に従います。
 `BASH_ENV` や `LD_PRELOAD` など、シェルやプログラムの起動時に使われる変数も指定できません。
 
 Pod 内の `kubectl` を自動引き継ぎに頼って使っていた場合は、Workspace 側で kubeconfig を管理する方法を推奨します。

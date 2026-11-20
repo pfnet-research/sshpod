@@ -92,6 +92,7 @@ jobs:
             --restart=Never \
             --env='SSHPOD_TEST_LABEL=two words "quoted" #tag \ tail ' \
             --env=SSHPOD_TEST_EMPTY= \
+            --env="$(printf 'SSHPOD_TEST_MULTILINE=first\nsecond')" \
             --command -- sh -c "while true; do sleep 3600; done"
           kubectl wait --for=condition=Ready "pod/$POD_NAME" --timeout=180s
 
@@ -124,7 +125,7 @@ jobs:
           test "$(ssh -o "ProxyCommand=$INHERIT" "$HOST" 'printf "%s" "$SSHPOD_TEST_LABEL"')" = \
             'two words "quoted" #tag \ tail '
 
-          printf 'printf "environment=%%s\\n" "$SSHPOD_TEST_LABEL"\nexit\n' |
+          printf 'printf "\\nenvironment=%%s\\n" "$SSHPOD_TEST_LABEL"\nexit\n' |
             timeout 30s ssh -tt -o "ProxyCommand=$INHERIT" "$HOST" |
             tr -d '\r' |
             grep -Fx 'environment=two words "quoted" #tag \ tail '
@@ -138,3 +139,12 @@ jobs:
             exit 1
           fi
           grep -F 'HOME is reserved' /tmp/ssh_env_error
+
+
+          if ssh -o "ProxyCommand=$PROXY --inherit-env SSHPOD_TEST_MULTILINE" "$HOST" true >/tmp/ssh_env_error 2>&1; then
+            echo 'A multiline environment value was accepted' >&2
+            exit 1
+          fi
+          grep -F 'multiline values are not supported' /tmp/ssh_env_error
+
+          printf 'pwd\n' | sftp -b - -o "ProxyCommand=$INHERIT" "$HOST" | grep -F 'Remote working directory'
