@@ -26,7 +26,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: ${{ github.ref_type == 'tag' && 0 || 1 }}
+          # The tag check below needs the history of main.
+          fetch-depth: 0
 
       - name: Read version from Cargo.toml
         id: version
@@ -51,6 +52,7 @@ jobs:
             echo "::error::Tag $GITHUB_REF_NAME does not match version $VERSION in Cargo.toml."
             exit 1
           fi
+          git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main"
           if ! git merge-base --is-ancestor HEAD origin/main; then
             echo "::error::Tag $GITHUB_REF_NAME is not on main."
             exit 1
